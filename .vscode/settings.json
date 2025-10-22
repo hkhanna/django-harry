@@ -1,0 +1,18 @@
+{
+  "files.autoSave": "onFocusChange",
+  "python.defaultInterpreterPath": ".venv/bin/python3",
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "editor.formatOnSave": true,
+  "editor.insertSpaces": true,
+  "editor.tabSize": 4,
+  "editor.defaultFormatter": "charliermarsh.ruff",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.venv": true
+  },
+  "files.watcherExclude": {
+    "**/__pycache__/**": true,
+    "**/.venv/**": true
+  }
+}
