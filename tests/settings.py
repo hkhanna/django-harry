@@ -30,6 +30,27 @@ DATABASES = {
     }
 }
 
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [],
+        },
+    },
+]
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.InMemoryStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LANGUAGE_CODE = "en-us"
@@ -60,6 +81,7 @@ SITE_CONFIG = {
 # EMAIL - FIXME
 # If there's a POSTMARK_API_KEY (for the Sandbox server), use the Postmark backend.
 # Otherwise, output to the console.
+# See https://docs.djangoproject.com/en/5.2/topics/testing/tools/#topics-testing-email - uses locmem, maybe we say it explicilty here?
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 POSTMARK_API_KEY = "test"
 POSTMARK_DEFAULT_STREAM_ID = "outbound"
