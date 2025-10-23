@@ -33,3 +33,11 @@ Run type checking:
 make mypy
 ```
 
+### Database Migrations
+
+Create new migrations:
+
+```bash
+make migrations
+```
+
