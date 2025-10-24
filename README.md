@@ -41,3 +41,7 @@ Create new migrations:
 make migrations
 ```
 
+# Usage
+- Create email templates
+- Configuring anymail
+- Call the appropriate functions
