@@ -52,10 +52,6 @@ class EmailMessage(models.Model):
         default=None,
         help_text="Message-ID provided by the sending service as per RFC 5322",
     )
-    # FIXME
-    # postmark_message_stream = models.CharField(
-    #     max_length=254, blank=True, help_text="Leave blank if not using Postmark"
-    # )
 
     Status = constants.EmailMessage.Status
     status = models.CharField(

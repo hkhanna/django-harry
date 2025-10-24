@@ -70,12 +70,6 @@ def email_message_prepare(*, email_message: EmailMessage) -> None:
         email_message.save()
         raise RuntimeError("Reply to has a name but does not have an email")
 
-    # FIXME
-    # if not e.postmark_message_stream:
-    #     email_message_update(
-    #         instance=e, postmark_message_stream=settings.POSTMARK_DEFAULT_STREAM_ID
-    #     )
-
     # Set defaults for template context if not provided.
     template_context = {
         "logo_url": settings.SITE_CONFIG["logo_url"],
@@ -234,11 +228,6 @@ def email_message_send(*, email_message: EmailMessage) -> None:
             django_email_message.attach(
                 attachment.filename, attachment.file.read(), attachment.mimetype
             )
-        # FIXME
-        # if email_message.postmark_message_stream:
-        #     django_email_message.message_stream = (
-        #         email_message.postmark_message_stream
-        #     )
 
         # FIXME
         # if global_setting_get_value("disable_outbound_email"):

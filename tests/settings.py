@@ -78,17 +78,10 @@ SITE_CONFIG = {
     "contact_email": "bob@example.com",
 }
 
-# EMAIL - FIXME
-# If there's a POSTMARK_API_KEY (for the Sandbox server), use the Postmark backend.
-# Otherwise, output to the console.
-# See https://docs.djangoproject.com/en/5.2/topics/testing/tools/#topics-testing-email - uses locmem, maybe we say it explicilty here?
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-POSTMARK_API_KEY = "test"
-POSTMARK_DEFAULT_STREAM_ID = "outbound"
-if POSTMARK_API_KEY:
-    EMAIL_BACKEND = "postmark.django_backend.EmailBackend"
-    POSTMARK_TEST_MODE = True
-    POSTMARK_RETURN_MESSAGE_ID = True
+# EMAIL
+# This ephemeral locmem backend would be automatically used anyway during testing no matter what was put in this setting.
+# See https://docs.djangoproject.com/en/5.2/topics/testing/tools/#topics-testing-email for more details
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 MAX_SUBJECT_LENGTH = 78
 # EMAIL_MESSAGE_WEBHOOK_PATH = env(
 #     "EMAIL_MESSAGE_WEBHOOK_PATH", default="email_message_webhook/"

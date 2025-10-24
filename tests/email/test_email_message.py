@@ -206,28 +206,6 @@ def test_email_attachment_matching_mime(user):
         )
 
 
-# FIXME
-# def test_postmark_message_stream(user, mailoutbox):
-#     email_message = services.email_message_create(
-#         created_by=user,
-#         subject="A subject",
-#         template_prefix="example",
-#         to_name=user.first_name,
-#         to_email=user.email,
-#         template_context={
-#             "user_name": user.first_name,
-#             "user_email": user.email,
-#             "password_reset_url": "",
-#         },
-#         postmark_message_stream="broadcast",
-#     )
-#     services.email_message_queue(email_message=email_message)
-#     email_message.refresh_from_db()
-#     assert email_message.status == constants.EmailMessage.Status.SENT
-#     assert len(mailoutbox) == 1
-#     assert mailoutbox[0].message_stream == "broadcast"
-
-
 def test_cooldown(user, mailoutbox):
     """A created_by/template_prefix/to_email combination has a cooldown period"""
     email_message_args = dict(
