@@ -165,7 +165,7 @@ def email_message_queue(
         e.save()
         return False
     else:
-        # FIXME: Use Django tasks or celery
+        # Use Django tasks or celery (#3)
         email_message_send(email_message=email_message)
         return True
 

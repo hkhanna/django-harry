@@ -48,7 +48,7 @@ Status = constants.EmailMessage.Status
         ("Delivery", Status.DELIVERED),
         ("Open", Status.OPENED),
         ("Bounce", Status.BOUNCED),
-        ("SpamComplaint", Status.SPAM),
+        ("SpamComplaint", Status.COMPLAINED),
     ],
 )
 def test_update_email_message_status(record_type, new_status):
@@ -103,4 +103,4 @@ def test_update_email_message_status_order():
     services.email_message_webhook_process(email_message_webhook=email_message_webhook)
 
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SPAM
+    assert email_message.status == constants.EmailMessage.Status.COMPLAINED

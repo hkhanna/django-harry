@@ -61,7 +61,7 @@ USE_I18N = True
 
 USE_TZ = True
 
-# Site Configuration - Refactor this (FIXME)
+# Site Configuration - Refactor this if we need to support more than one site
 SITE_CONFIG = {
     "name": "Example App",
     "logo_url_link": "",
@@ -81,5 +81,6 @@ SITE_CONFIG = {
 # EMAIL
 # This ephemeral locmem backend would be automatically used anyway during testing no matter what was put in this setting.
 # See https://docs.djangoproject.com/en/5.2/topics/testing/tools/#topics-testing-email for more details
+# We override this where necessary to use the anymail backend: anymail.backends.test.EmailBackend
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 MAX_SUBJECT_LENGTH = 78

@@ -10,6 +10,11 @@ from .. import factories
 from harry.email import constants, services
 
 
+@pytest.fixture(autouse=True)
+def anymail_backend(settings):
+    settings.EMAIL_BACKEND = "anymail.backends.test.EmailBackend"
+
+
 def test_send_email(user, mailoutbox, settings):
     """Create and send an EmailMessage"""
     email_message = services.email_message_create(
@@ -27,7 +32,7 @@ def test_send_email(user, mailoutbox, settings):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
     assert len(mailoutbox) == 1
     assert mailoutbox[0].subject == "A subject"
     assert mailoutbox[0].to == [f"{user.first_name} <{user.email}>"]
@@ -66,7 +71,7 @@ def test_send_email_sanitize(user, name, email, expected, mailoutbox):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
     assert len(mailoutbox) == 1
     assert mailoutbox[0].subject == "A subject"
     assert mailoutbox[0].to == [expected]
@@ -160,7 +165,7 @@ def test_email_attachment(user, mailoutbox):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
     assert email_message.attachments.count() == 2
     assert len(mailoutbox) == 1
     assert len(mailoutbox[0].attachments) == 2
@@ -226,7 +231,7 @@ def test_cooldown(user, mailoutbox):
     assert services.email_message_queue(email_message=email_message) is True
     assert len(mailoutbox) == 1
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
 
     # Send an email with a different recipient
     email_message = services.email_message_create(
@@ -235,7 +240,7 @@ def test_cooldown(user, mailoutbox):
     assert services.email_message_queue(email_message=email_message) is True
     assert len(mailoutbox) == 2
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
 
     # Cancel the third email that is identical to the first
     email_message = services.email_message_create(**email_message_args)
@@ -250,7 +255,7 @@ def test_cooldown(user, mailoutbox):
         assert services.email_message_queue(email_message=email_message) is True
         assert len(mailoutbox) == 3
         email_message.refresh_from_db()
-        assert email_message.status == constants.EmailMessage.Status.SENT
+        assert email_message.status == constants.EmailMessage.Status.ACCEPTED
 
 
 def test_cooldown_scopes(user, mailoutbox):
@@ -273,7 +278,7 @@ def test_cooldown_scopes(user, mailoutbox):
     assert services.email_message_queue(email_message=email_message) is True
     assert len(mailoutbox) == 1
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
 
     # Email with different recipient cancels if "to" scope is removed
     email_message = services.email_message_create(
@@ -363,7 +368,7 @@ def test_send_email_with_reply_to(user, mailoutbox):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.SENT
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
     assert len(mailoutbox) == 1
     assert mailoutbox[0].reply_to == ["Support <support@example.com>"]
 
