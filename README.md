@@ -72,11 +72,6 @@ ANYMAIL = {
     "MAILGUN_WEBHOOK_SIGNING_KEY": env("MAILGUN_WEBHOOK_SIGNING_KEY")
 }
 
-# Example using Amazon SES
-EMAIL_BACKEND = "anymail.backends.amazon_ses.EmailBackend"
-ANYMAIL = {
-    ... see Anymail docs for SES settings
-}
 ```
 
 See the [anymail docs](https://anymail.dev/en/stable/) for the full list of
@@ -324,24 +319,34 @@ https://<part1>:<part2>@yourdomain.com/anymail/mailgun/tracking/
 Every `EmailMessage` moves through these statuses:
 
 ```
-NEW ──> READY ──> PENDING ──> SENT ──> DELIVERED
- │                  │                      │
- │                  ▼                      ├──> OPENED
- │                ERROR                    ├──> BOUNCED
- ▼                                         └──> SPAM
-CANCELED
+                 CANCELED
+                 ▲
+                 │
+NEW ──> READY ──┼──> PENDING ──> ACCEPTED ──> DELIVERED
+                │      │                         │
+                ▼      ▼                         ├──> OPENED ──> CLICKED
+              ERROR  ERROR                       ├──> BOUNCED
+                                                 ├──> REJECTED
+                                                 ├──> COMPLAINED
+                                                 └──> UNSUBSCRIBED
 ```
+
+Unrecognized ESP event types are stored as `UNKNOWN`.
 
 | Status | Meaning |
 |---|---|
 | `NEW` | Created, not yet prepared |
 | `READY` | Prepared with defaults applied, validated, ready to send |
 | `PENDING` | Handed off to the email backend |
-| `SENT` | Backend accepted the message |
+| `ACCEPTED` | Backend accepted the message |
 | `DELIVERED` | ESP confirmed delivery to recipient's mail server |
 | `OPENED` | Recipient opened the email (if tracking is enabled) |
+| `CLICKED` | Recipient clicked a link in the email (if tracking is enabled) |
 | `BOUNCED` | Delivery failed (hard or soft bounce) |
-| `SPAM` | Recipient marked the email as spam |
+| `REJECTED` | ESP rejected the message before delivery |
+| `COMPLAINED` | Recipient marked the email as spam |
+| `UNSUBSCRIBED` | Recipient unsubscribed via email headers |
+| `UNKNOWN` | ESP reported an unrecognized event type |
 | `CANCELED` | Suppressed by cooldown |
 | `ERROR` | Something went wrong during preparation or sending |
 
