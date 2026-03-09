@@ -83,6 +83,3 @@ SITE_CONFIG = {
 # See https://docs.djangoproject.com/en/5.2/topics/testing/tools/#topics-testing-email for more details
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 MAX_SUBJECT_LENGTH = 78
-# EMAIL_MESSAGE_WEBHOOK_PATH = env(
-#     "EMAIL_MESSAGE_WEBHOOK_PATH", default="email_message_webhook/"
-# )

@@ -95,39 +95,3 @@ class EmailMessageAttachment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.email_message} / {self.filename} ({self.uuid})"
-
-
-class EmailMessageWebhook(models.Model):
-    """Webhooks related to an outgoing EmailMessage, like bounces, spam complaints, etc."""
-
-    uuid = models.UUIDField(
-        default=uuid.uuid4,
-        editable=False,
-        unique=True,
-        verbose_name="UUID",
-        help_text="Secondary ID",
-    )
-    created_at = models.DateTimeField(db_index=True, default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-    received_at = models.DateTimeField(auto_now_add=True)
-    body = models.JSONField()
-    headers = models.JSONField()
-
-    type = models.CharField(max_length=254, blank=True)
-    email_message = models.ForeignKey(
-        EmailMessage, null=True, blank=True, on_delete=models.SET_NULL
-    )
-    note = models.TextField(blank=True)
-
-    Status = constants.EmailMessageWebhook.Status
-    status = models.CharField(
-        max_length=127,
-        choices=Status.choices,
-        default=Status.NEW,
-    )
-
-    def __str__(self) -> str:
-        if self.type:
-            return f"{self.type} ({self.id})"
-        else:
-            return f"unknown ({self.id})"

@@ -298,34 +298,6 @@ def email_message_attachment_create(**kwargs) -> EmailMessageAttachment:
     return EmailMessageAttachment.objects.create(**kwargs)
 
 
-def email_message_webhook_create_from_request(
-    *, body: str, headers: dict
-) -> EmailMessageWebhook:
-    """Create an EmailMessageWebhook from a request object."""
-    payload = validate_request_body_json(body=body)
-    if not isinstance(payload, dict):
-        raise ValueError("Invalid payload")
-
-    headers_processed = {}
-    for key in headers:
-        value = headers[key]
-        if isinstance(value, str):
-            headers_processed[key] = value
-
-    webhook = email_message_webhook_create(
-        body=payload,
-        headers=headers_processed,
-        status=constants.EmailMessageWebhook.Status.NEW,
-    )
-    logger.info(f"EmailMessageWebhook.id={webhook.id} received")
-
-    return webhook
-
-
-def email_message_webhook_create(**kwargs) -> EmailMessageWebhook:
-    return EmailMessageWebhook.objects.create(**kwargs)
-
-
 def email_message_webhook_process(
     *, email_message_webhook: EmailMessageWebhook
 ) -> None:
