@@ -59,6 +59,12 @@ class EmailMessage(models.Model):
         choices=Status.choices,
         default=Status.NEW,
     )
+    esp_event = models.JSONField(
+        default=dict, blank=True, help_text="Raw ESP webhook event"
+    )
+    esp_event_at = models.DateTimeField(
+        null=True, blank=True, help_text="Timestamp of most recent ESP webhook received"
+    )
     error_message = models.TextField(blank=True)
 
     def __str__(self) -> str:

@@ -13,9 +13,11 @@ from django.template import TemplateDoesNotExist
 from django.template.loader import render_to_string
 from django.utils import timezone
 
+from anymail.signals import AnymailTrackingEvent
+
 from . import constants
-from .models import EmailMessage, EmailMessageAttachment, EmailMessageWebhook
-from .utils import trim_string, validate_request_body_json
+from .models import EmailMessage, EmailMessageAttachment
+from .utils import trim_string
 
 logger = logging.getLogger(__name__)
 
@@ -298,63 +300,73 @@ def email_message_attachment_create(**kwargs) -> EmailMessageAttachment:
     return EmailMessageAttachment.objects.create(**kwargs)
 
 
-def email_message_webhook_process(
-    *, email_message_webhook: EmailMessageWebhook
-) -> None:
-    webhook = email_message_webhook
+def email_message_webhook_process(*, event: AnymailTrackingEvent) -> None:
+    logger.info(
+        "Webhook received: event_type=%s message_id=%s event_id=%s recipient=%s",
+        event.event_type,
+        event.message_id,
+        event.event_id,
+        event.recipient,
+    )
     try:
-        if webhook.status != constants.EmailMessageWebhook.Status.NEW:
-            raise RuntimeError(
-                f"EmailMessageWebhook.id={webhook.id} process_email_message_webhook called on a webhook that is not status=NEW"
+        if not event.message_id:
+            logger.warning(
+                "Webhook has no message_id, skipping: event_type=%s event_id=%s",
+                event.event_type,
+                event.event_id,
             )
-        webhook.status = constants.EmailMessageWebhook.Status.PENDING
-        webhook.full_clean()
-        webhook.save()
+            return
 
-        # Store the type
-        if "RecordType" in webhook.body:
-            webhook.type = webhook.body["RecordType"]
-            webhook.full_clean()
-            webhook.save()
+        email_message = EmailMessage.objects.filter(message_id=event.message_id).first()
+        if not email_message:
+            logger.warning(
+                "No EmailMessage found for message_id=%s, skipping: event_type=%s event_id=%s",
+                event.message_id,
+                event.event_type,
+                event.event_id,
+            )
+            return
 
-        # Find the related EmailMessage and connect it
-        if "MessageID" in webhook.body:
-            email_message = EmailMessage.objects.filter(
-                message_id=webhook.body["MessageID"]
-            ).first()
-            if email_message:
-                webhook.email_message = email_message
-                if webhook.type in constants.WEBHOOK_TYPE_TO_EMAIL_STATUS:
-                    # Make sure this is the most recent webhook, in case it arrived out of order.
-                    all_ts = []
-                    for other_webhook in EmailMessageWebhook.objects.filter(
-                        email_message=email_message
-                    ):
-                        ts_key = constants.WEBHOOK_TYPE_TO_TIMESTAMP[other_webhook.type]
-                        ts = other_webhook.body[ts_key]
-                        ts = ts.replace("Z", "+00:00")
-                        all_ts.append(datetime.fromisoformat(ts))
-                    all_ts.sort()
+        logger.debug(
+            "Matched EmailMessage.id=%s (status=%s) for message_id=%s",
+            email_message.id,
+            email_message.status,
+            event.message_id,
+        )
 
-                    ts_key = constants.WEBHOOK_TYPE_TO_TIMESTAMP[webhook.type]
-                    ts = webhook.body[ts_key]
-                    ts = ts.replace("Z", "+00:00")
-                    ts_dt = datetime.fromisoformat(ts)
-                    if len(all_ts) == 0 or all_ts[-1] < ts_dt:
-                        new_status = constants.WEBHOOK_TYPE_TO_EMAIL_STATUS[
-                            webhook.type
-                        ]
-                        email_message.status = new_status
-                        email_message.full_clean()
-                        email_message.save()
+        # Make sure this is the most recent webhook, in case it arrived out of order.
+        if email_message.esp_event_at and email_message.esp_event_at > event.timestamp:
+            logger.warning(
+                "Stale webhook ignored: EmailMessage.id=%s has esp_event_at=%s but event timestamp=%s, event_type=%s event_id=%s esp_event=%s",
+                email_message.id,
+                email_message.esp_event_at,
+                event.timestamp,
+                event.event_type,
+                event.event_id,
+                event.esp_event,
+            )
+            return
 
-        webhook.status = constants.EmailMessageWebhook.Status.PROCESSED
-        webhook.full_clean()
-        webhook.save()
-        logger.debug(f"EmailMessageWebhook.id={webhook.id} processed")
+        old_status = email_message.status
+        email_message.status = event.event_type
+        email_message.esp_event = event.esp_event
+        email_message.esp_event_at = event.timestamp
+        email_message.full_clean()
+        email_message.save()
+        logger.info(
+            "EmailMessage.id=%s status updated: %s -> %s (event_id=%s)",
+            email_message.id,
+            old_status,
+            event.event_type,
+            event.event_id,
+        )
+
     except Exception:
-        logger.exception(f"EmailMessageWebhook.id={webhook.id} in error state")
-        webhook.status = constants.EmailMessageWebhook.Status.ERROR
-        webhook.note = traceback.format_exc()
-        webhook.full_clean()
-        webhook.save()
+        logger.exception(
+            "Error processing webhook: message_id=%s event_type=%s event_id=%s timestamp=%s esp_event=%s",
+            event.message_id,
+            event.event_type,
+            event.event_id,
+            event.timestamp,
+            event.esp_event,
+        )

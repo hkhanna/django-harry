@@ -3,6 +3,7 @@ from django.db import models
 
 class EmailMessage:
     class Status(models.TextChoices):
+        # FIXME: update these, then update the README
         NEW = "new"
         READY = "ready"
         PENDING = "pending"

@@ -319,66 +319,6 @@ credentials:
 https://<part1>:<part2>@yourdomain.com/anymail/mailgun/tracking/
 ```
 
-#### 2. Connect anymail signals to harry
-
-Create a signal handler to bridge anymail tracking events into harry's webhook
-processing. In your app (e.g. `core/signals.py`):
-
-```python
-from anymail.signals import tracking
-from django.dispatch import receiver
-
-from harry.email.services import (
-    email_message_webhook_create,
-    email_message_webhook_process,
-)
-from harry.email.models import EmailMessage
-
-
-@receiver(tracking)
-def handle_email_tracking(sender, event, esp_name, **kwargs):
-    # Store the raw webhook
-    webhook = email_message_webhook_create(
-        body=event.esp_event,
-        headers={},
-        type=event.event_type,
-        status="new",
-    )
-
-    # Link to the EmailMessage by provider message ID
-    email_message = EmailMessage.objects.filter(
-        message_id=event.message_id,
-    ).first()
-
-    if email_message:
-        webhook.email_message = email_message
-        webhook.save()
-
-        # Map anymail event types to EmailMessage statuses
-        status_map = {
-            "delivered": EmailMessage.Status.DELIVERED,
-            "opened": EmailMessage.Status.OPENED,
-            "bounced": EmailMessage.Status.BOUNCED,
-            "complained": EmailMessage.Status.SPAM,
-        }
-        new_status = status_map.get(event.event_type)
-        if new_status:
-            email_message.status = new_status
-            email_message.full_clean()
-            email_message.save()
-```
-
-Make sure the signal handler is imported when Django starts. In your app's
-`apps.py`:
-
-```python
-class CoreConfig(AppConfig):
-    name = "core"
-
-    def ready(self):
-        import core.signals  # noqa: F401
-```
-
 ### Email status lifecycle
 
 Every `EmailMessage` moves through these statuses:
