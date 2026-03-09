@@ -9,7 +9,7 @@ def user():
     return user
 
 
-# FIXME
+# See #2
 # @pytest.fixture
 # def org(user):
 #     # User should be a non-owner member of the Org

@@ -26,7 +26,7 @@ def user_create(**kwargs):
     user = User.objects.create_user(**params)
 
     # If an org was passed, add the user to it.
-    # FIXME
+    # See #2
     # if org:
     #     org.users.add(user)
 
@@ -46,7 +46,7 @@ def email_message_create(**kwargs):
     return harry.email.services.email_message_create(save=True, **params)
 
 
-# FIXME
+# See #2
 # def org_create(**kwargs):
 #     defaults = dict(
 #         name=fake.company(),

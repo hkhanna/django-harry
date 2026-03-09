@@ -231,7 +231,7 @@ def email_message_send(*, email_message: EmailMessage) -> None:
                 attachment.filename, attachment.file.read(), attachment.mimetype
             )
 
-        # FIXME
+        # See #2
         # if global_setting_get_value("disable_outbound_email"):
         #     raise RuntimeError("GlobalSetting disable_outbound_email is True")
         else:

@@ -27,7 +27,7 @@ class EmailMessage(models.Model):
         null=True,
         blank=True,
     )
-    # FIXME
+    # See #2
     # org = models.ForeignKey(
     #     "core.Org",
     #     on_delete=models.SET_NULL,
