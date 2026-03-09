@@ -2,6 +2,7 @@ import tempfile
 from datetime import timedelta
 
 import pytest
+from anymail.signals import AnymailTrackingEvent
 from django.utils import timezone
 from freezegun import freeze_time
 
@@ -394,3 +395,145 @@ def test_reply_to_name_no_email(user, mailoutbox):
     email_message.refresh_from_db()
     assert email_message.status == constants.EmailMessage.Status.ERROR
     assert len(mailoutbox) == 0
+
+
+# --- Webhook processing tests ---
+
+
+def test_webhook_updates_status():
+    """A delivered event for a known message_id updates the EmailMessage's status, esp_event, and esp_event_at fields"""
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.ACCEPTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type="delivered",
+        message_id="test-message-id-123",
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+        esp_event={"raw": "event-data"},
+    )
+
+    services.email_message_webhook_process(event=event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.DELIVERED
+    assert email_message.esp_event == {"raw": "event-data"}
+    assert email_message.esp_event_at == event.timestamp
+
+
+def test_webhook_unknown_event_type():
+    """An event type not in the Status choices (e.g. 'autoresponded') sets status to UNKNOWN"""
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.ACCEPTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type="autoresponded",
+        message_id="test-message-id-123",
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+        esp_event={"raw": "event-data"},
+    )
+
+    services.email_message_webhook_process(event=event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.UNKNOWN
+    assert email_message.esp_event == {"raw": "event-data"}
+    assert email_message.esp_event_at == event.timestamp
+
+
+def test_webhook_no_message_id():
+    """Event with message_id=None returns early with a warning without touching any records"""
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.ACCEPTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type="delivered",
+        message_id=None,
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+    )
+
+    services.email_message_webhook_process(event=event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.esp_event == {}
+    assert email_message.esp_event_at is None
+
+
+def test_webhook_no_matching_email_message():
+    """Event with a message_id that doesn't match any EmailMessage returns early with a warning"""
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.ACCEPTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type="delivered",
+        message_id="nonexistent-message-id",
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+    )
+
+    services.email_message_webhook_process(event=event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.esp_event == {}
+    assert email_message.esp_event_at is None
+
+
+def test_webhook_stale_event_ignored():
+    """An event with a timestamp older than the existing esp_event_at is ignored (out-of-order protection)"""
+    now = timezone.now()
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.DELIVERED,
+        message_id="test-message-id-123",
+        esp_event={"raw": "newer-event"},
+        esp_event_at=now,
+    )
+
+    stale_event = AnymailTrackingEvent(
+        event_type="bounced",
+        message_id="test-message-id-123",
+        recipient=email_message.to_email,
+        timestamp=now - timedelta(seconds=30),
+        esp_event={"raw": "stale-event"},
+    )
+
+    services.email_message_webhook_process(event=stale_event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.DELIVERED
+    assert email_message.esp_event == {"raw": "newer-event"}
+    assert email_message.esp_event_at == now
+
+
+def test_webhook_signal_integration():
+    """The anymail tracking signal receiver is properly registered and calls through to the service function"""
+    from anymail.signals import tracking
+
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.ACCEPTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type="delivered",
+        message_id="test-message-id-123",
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+        esp_event={"raw": "event-data"},
+    )
+
+    tracking.send(sender=object(), event=event, esp_name="TestESP")
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.DELIVERED
