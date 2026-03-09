@@ -235,13 +235,8 @@ def email_message_send(*, email_message: EmailMessage) -> None:
         # if global_setting_get_value("disable_outbound_email"):
         #     raise RuntimeError("GlobalSetting disable_outbound_email is True")
         else:
-            message_ids = django_email_message.send()
-
-            # FIXME
-            # Postmark has a setting for returning MessageIDs
-            if isinstance(message_ids, list):
-                if len(message_ids) == 1:
-                    email_message.message_id = message_ids[0]
+            django_email_message.send()
+            email_message.message_id = django_email_message.anymail_status.message_id
 
     except Exception as e:
         email_message.status = constants.EmailMessage.Status.ERROR
