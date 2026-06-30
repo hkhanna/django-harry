@@ -372,3 +372,129 @@ EmailMessage.objects.filter(
     sent_at__gte=timezone.now() - timedelta(hours=24),
 )
 ```
+
+## Logging
+
+harry ships a reusable logging configuration so every project that installs it logs the same
+way. It has no extra dependencies: it builds a standard Django
+[`LOGGING`](https://docs.djangoproject.com/en/5.2/topics/logging/) dictionary.
+
+### Setup
+
+In your project's `settings.py`:
+
+```python
+from harry.logconfig import build_logging_config
+
+LOGGING = build_logging_config()
+```
+
+That's it. By default the configuration:
+
+- logs human-readable, colorless console output in development and **structured JSON** in
+  production;
+- writes to **stdout** (12-factor) — no file handlers, so the platform (systemd, Docker, your
+  log collector) owns persistence and rotation;
+- keeps `disable_existing_loggers` off so Django's and third-party loggers keep working;
+- configures the `django`, `django.request`, `django.security`, and `harry` loggers plus the
+  root logger.
+
+### Configuration
+
+`build_logging_config()` resolves each setting from its keyword argument, then an environment
+variable, then a per-environment default:
+
+| Argument | Env var | Values | Default |
+|---|---|---|---|
+| `env` | `DJANGO_ENV` | `local` / `test` / `prod` | `local` |
+| `level` | `DJANGO_LOG_LEVEL` | any logging level | `DEBUG` (local), `WARNING` (test), `INFO` (prod) |
+| `fmt` | `DJANGO_LOG_FORMAT` | `console` / `json` | `console` (local/test), `json` (prod) |
+
+```python
+# Add or override loggers for your project without losing the defaults:
+LOGGING = build_logging_config(
+    extra_loggers={"myapp": {"level": "INFO", "handlers": ["console"], "propagate": False}},
+)
+```
+
+`env` is read from `os.environ`, not `settings.DEBUG`, because the builder runs while
+`settings.py` is still being evaluated. Set `DJANGO_ENV` in each environment.
+
+A production log line looks like:
+
+```json
+{"ts": "2026-06-30T12:34:56.789012+00:00", "level": "INFO", "logger": "harry.email.services", "msg": "Sent email message", "message_id": "…"}
+```
+
+Anything you pass via `logger.info("…", extra={"message_id": mid})` is merged into the JSON.
+
+### Shipping logs to SigNoz (production)
+
+The production assumption is [SigNoz](https://signoz.io/). Because you'll already run an
+OpenTelemetry Collector on the host for OS/VPS metrics and system logs, the simplest setup is
+to let that **same Collector** pick up the application logs — no OpenTelemetry packages in the
+app itself.
+
+1. Run Django under **systemd** (e.g. gunicorn). harry's JSON goes to stdout, which systemd
+   captures in the **journal**.
+2. Install the OpenTelemetry Collector on the host and give it one pipeline for host metrics
+   and one for logs. Sketch:
+
+   ```yaml
+   receivers:
+     hostmetrics:
+       collection_interval: 60s
+       scrapers: { cpu: {}, memory: {}, disk: {}, filesystem: {}, load: {}, network: {} }
+     journald:
+       units: [your-django.service]      # or a `filelog` receiver if you log to a file
+       start_at: end
+       operators:
+         # journald delivers the entry as a map; collapse it to the MESSAGE line...
+         - type: move
+           from: body.MESSAGE
+           to: body
+           if: 'body.MESSAGE != nil'
+         # ...then parse harry's JSON. Recover the real severity from the `level`
+         # field — journald otherwise stamps everything on stdout as INFO, which
+         # would flatten an app ERROR to INFO in SigNoz.
+         - type: json_parser
+           if: 'body != nil and body matches "^[{]"'
+           parse_from: body
+           parse_to: attributes
+           severity:
+             parse_from: attributes.level
+             mapping: { debug: DEBUG, info: INFO, warn: WARNING, error: ERROR, fatal: CRITICAL }
+         # Surface the human message as the log body in SigNoz (level/logger/func/
+         # lineno and any extras remain queryable attributes).
+         - type: move
+           from: attributes.msg
+           to: body
+           if: 'attributes.msg != nil'
+   processors:
+     resourcedetection: { detectors: [system] }
+     batch: {}
+   exporters:
+     otlp:
+       endpoint: ingest.<region>.signoz.cloud:443
+       headers: { signoz-ingestion-key: "${env:SIGNOZ_INGESTION_KEY}" }
+   service:
+     pipelines:
+       logs:    { receivers: [journald],    processors: [resourcedetection, batch], exporters: [otlp] }
+       metrics: { receivers: [hostmetrics], processors: [resourcedetection, batch], exporters: [otlp] }
+   ```
+
+   The two pieces that matter: the `json_parser` recovers severity from harry's `level`
+   field (without it, journald reports every line as INFO), and moving `msg` to the body
+   gives a clean message in SigNoz with everything else as attributes. If you also emit
+   `trace_id`/`span_id` (see below), they flow through `parse_to: attributes` and SigNoz
+   correlates the log with its trace. See the SigNoz docs for the authoritative configuration:
+   [install the Collector on a VM](https://signoz.io/docs/opentelemetry-collection-agents/vm/install/),
+   [host metrics](https://signoz.io/docs/infrastructure-monitoring/hostmetrics/),
+   [systemd/journald logs](https://signoz.io/docs/logs-management/send-logs/collect-systemd-logs/),
+   [logs from a file](https://signoz.io/docs/userguide/collect_logs_from_file/).
+
+**Trace↔log correlation.** harry's JSON formatter emits `trace_id`/`span_id`/`service.name`
+whenever OpenTelemetry has populated them on the log record. So if you later add tracing
+(running the app under `opentelemetry-instrument` with the `OTEL_*` environment variables),
+your Collector-shipped logs automatically correlate with traces in SigNoz — no in-app log
+exporter and no change to harry required.
