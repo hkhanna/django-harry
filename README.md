@@ -417,6 +417,9 @@ LOGGING = build_logging_config(
 )
 ```
 
+The merge is shallow: an entry in `extra_loggers` replaces a built-in logger wholesale, so
+when overriding one (say, `django.request`) spell out `handlers` and `propagate` too.
+
 `env` is read from `os.environ`, not `settings.DEBUG`, because the builder runs while
 `settings.py` is still being evaluated. Set `DJANGO_ENV` in each environment.
 

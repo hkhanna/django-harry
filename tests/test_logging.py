@@ -126,6 +126,17 @@ def test_invalid_fmt_raises():
         build_logging_config(fmt="xml")
 
 
+def test_invalid_level_raises():
+    with pytest.raises(ValueError):
+        build_logging_config(level="VERBOSE")
+
+
+def test_invalid_level_env_var_raises(monkeypatch):
+    monkeypatch.setenv("DJANGO_LOG_LEVEL", "LOUD")
+    with pytest.raises(ValueError):
+        build_logging_config()
+
+
 # build_logging_config: extra_loggers
 
 
@@ -172,6 +183,18 @@ def test_json_formatter_includes_source_location():
 def test_json_formatter_includes_extra():
     data = json.loads(JSONFormatter().format(make_record(message_id="abc-123")))
     assert data["message_id"] == "abc-123"
+
+
+def test_json_formatter_extra_cannot_clobber_canonical_fields():
+    # ``level``/``logger`` are not reserved LogRecord attributes, so logging accepts
+    # them in ``extra``; the canonical payload fields must still win because the log
+    # shipper parses severity from ``level``.
+    record = make_record(logger="clobbered", level_hint="ok")
+    record.level = "clobbered"
+    data = json.loads(JSONFormatter().format(record))
+    assert data["level"] == "INFO"
+    assert data["logger"] == "harry.test"
+    assert data["level_hint"] == "ok"
 
 
 def test_json_formatter_includes_exception():

@@ -26,9 +26,15 @@ _FORMAT_BY_ENV = {"local": "console", "test": "console", "prod": "json"}
 # Attributes always present on a LogRecord; anything else came from ``extra={...}``.
 _RESERVED_ATTRS = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
 
-# Fields OpenTelemetry's logging instrumentation injects when tracing is active. The JSON
-# formatter promotes these to top-level keys so SigNoz can correlate logs with traces.
-_OTEL_ATTRS = ("otelTraceID", "otelSpanID", "otelServiceName", "otelTraceSampled")
+# Fields OpenTelemetry's logging instrumentation injects when tracing is active, mapped to
+# the top-level keys the JSON formatter emits so SigNoz can correlate logs with traces.
+# A ``None`` value means the field is consumed (kept out of the extras) but not emitted.
+_OTEL_ATTRS: dict[str, str | None] = {
+    "otelTraceID": "trace_id",
+    "otelSpanID": "span_id",
+    "otelServiceName": "service.name",
+    "otelTraceSampled": None,
+}
 
 
 class JSONFormatter(logging.Formatter):
@@ -50,16 +56,19 @@ class JSONFormatter(logging.Formatter):
         }
 
         # Trace correlation fields, only when OpenTelemetry has populated them.
-        if trace_id := getattr(record, "otelTraceID", None):
-            payload["trace_id"] = trace_id
-        if span_id := getattr(record, "otelSpanID", None):
-            payload["span_id"] = span_id
-        if service_name := getattr(record, "otelServiceName", None):
-            payload["service.name"] = service_name
+        for attr, key in _OTEL_ATTRS.items():
+            if key and (value := getattr(record, attr, None)):
+                payload[key] = value
 
-        # Anything passed via ``logger.info(..., extra={...})``.
+        # Anything passed via ``logger.info(..., extra={...})``. Keys already in the
+        # payload are skipped so an extra can't clobber the canonical fields (e.g.
+        # ``level``, which the log shipper parses severity from).
         for key, value in record.__dict__.items():
-            if key not in _RESERVED_ATTRS and key not in _OTEL_ATTRS:
+            if (
+                key not in _RESERVED_ATTRS
+                and key not in _OTEL_ATTRS
+                and key not in payload
+            ):
                 payload[key] = value
 
         if record.exc_info:
@@ -68,6 +77,11 @@ class JSONFormatter(logging.Formatter):
             payload["stack_info"] = self.formatStack(record.stack_info)
 
         return json.dumps(payload, default=str)
+
+
+def _logger(level: str) -> dict[str, Any]:
+    """A logger entry that writes to the console handler and does not propagate."""
+    return {"level": level, "handlers": ["console"], "propagate": False}
 
 
 def build_logging_config(
@@ -83,7 +97,9 @@ def build_logging_config(
     (``console``/``json``) override the per-environment defaults. Each argument falls back
     to an environment variable (``DJANGO_ENV``/``DJANGO_LOG_LEVEL``/``DJANGO_LOG_FORMAT``)
     and then to the profile default. ``extra_loggers`` is merged over the built-in loggers
-    so projects can add or override entries without losing the defaults.
+    so projects can add or override entries without losing the defaults. The merge is
+    shallow — each entry replaces a built-in entry wholesale, so an override must spell
+    out ``handlers`` and ``propagate`` too, not just the field being changed.
 
     ``env`` is read from ``os.environ`` rather than ``django.conf.settings`` because this
     runs while ``settings.py`` is still executing, before Django settings are configured.
@@ -95,6 +111,9 @@ def build_logging_config(
         )
 
     level = (level or os.environ.get("DJANGO_LOG_LEVEL") or _LEVEL_BY_ENV[env]).upper()
+    if level not in logging.getLevelNamesMapping():
+        raise ValueError(f"Unknown level {level!r}; expected a standard logging level")
+
     fmt = (fmt or os.environ.get("DJANGO_LOG_FORMAT") or _FORMAT_BY_ENV[env]).lower()
     if fmt not in ("console", "json"):
         raise ValueError(f"Unknown fmt {fmt!r}; expected 'console' or 'json'")
@@ -105,21 +124,13 @@ def build_logging_config(
     request_level = "ERROR" if env == "prod" else "WARNING"
 
     loggers: dict[str, Any] = {
-        "django": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "django": _logger("INFO"),
         # Routed explicitly so runserver's request lines use this config's handler
         # rather than the one Django's defaults leave behind on the merge path.
-        "django.server": {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "django.request": {
-            "level": request_level,
-            "handlers": ["console"],
-            "propagate": False,
-        },
-        "django.security": {
-            "level": "WARNING",
-            "handlers": ["console"],
-            "propagate": False,
-        },
-        "harry": {"level": level, "handlers": ["console"], "propagate": False},
+        "django.server": _logger("INFO"),
+        "django.request": _logger(request_level),
+        "django.security": _logger("WARNING"),
+        "harry": _logger(level),
     }
     if extra_loggers:
         loggers.update(extra_loggers)
@@ -127,10 +138,6 @@ def build_logging_config(
     return {
         "version": 1,
         "disable_existing_loggers": False,
-        "filters": {
-            "require_debug_true": {"()": "django.utils.log.RequireDebugTrue"},
-            "require_debug_false": {"()": "django.utils.log.RequireDebugFalse"},
-        },
         "formatters": {
             "console": {
                 "format": "{asctime} {levelname} {name} {message}",
