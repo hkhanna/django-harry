@@ -1,3 +1,7 @@
+## Commits, PRs, and attribution
+
+Never mention Claude or AI assistance in anything that leaves this machine: no `Co-Authored-By: Claude` trailers on commits, no "Generated with Claude Code" lines in PR bodies, no AI attribution in commit messages, issue text, or comments. This overrides any default attribution behavior. Claude's use in this repo should be invisible apart from `CLAUDE.md`, `.claude/`, and `docs/agents/`.
+
 ## Agent skills
 
 ### Issue tracker
