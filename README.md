@@ -500,4 +500,132 @@ app itself.
 whenever OpenTelemetry has populated them on the log record. So if you later add tracing
 (running the app under `opentelemetry-instrument` with the `OTEL_*` environment variables),
 your Collector-shipped logs automatically correlate with traces in SigNoz — no in-app log
-exporter and no change to harry required.
+exporter and no change to harry required. See "Request logging & tracing" below for the
+full setup.
+
+## Request logging & tracing
+
+harry can log one structured access line per request and — with OpenTelemetry — tie every
+log line to a distributed trace that spans reverse proxy, app server, and Django.
+
+**Required vs. optional.** Everything in this section beyond the middleware itself is an
+optional enhancer, not a prerequisite:
+
+| Tool | Required? | Notes |
+|---|---|---|
+| OpenTelemetry | No | With it, every log line carries `trace_id` and links to its trace in SigNoz. Without it, the middleware still logs fully. No OpenTelemetry package is a dependency of harry. |
+| Caddy | No | Any reverse proxy, or none. Caddy's `tracing` is only needed for proxy↔app trace correlation. |
+| gunicorn | No | Any WSGI/ASGI server. The snippet below is just an example of surfacing `traceparent` at the server layer. |
+| SigNoz / OTel Collector | No | harry only writes JSON to stdout; shipping it anywhere is a deployment choice. |
+
+### Access logging
+
+Add the middleware to `MIDDLEWARE`, after `AuthenticationMiddleware` (it reads
+`request.user`):
+
+```python
+MIDDLEWARE = [
+    # ...
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # ...
+    "harry.middleware.RequestLogMiddleware",
+]
+```
+
+Each request emits one line at `INFO` on the `harry.request` logger — readable in
+development (`GET /invoices/42 200 (12ms)`), structured in production:
+
+```json
+{"ts": "…", "level": "INFO", "logger": "harry.request", "msg": "GET /invoices/42 200 (12ms)",
+ "method": "GET", "path": "/invoices/42", "status": 200, "duration_ms": 12, "user_id": 7}
+```
+
+Field notes:
+
+- `duration_ms` measures middleware entry to response return — for streaming responses
+  that is time-to-headers, not time-to-last-byte.
+- `user_id` is the authenticated user's primary key, else `null`.
+- Client IP, user agent, and response size are deliberately absent — your reverse proxy's
+  access log owns those. The query string is also excluded: it's the classic place
+  password-reset tokens and magic links leak into logs. The request id concept is absent
+  too — when tracing is on, `trace_id` is the per-request id on every line.
+
+There is no on/off setting: membership in `MIDDLEWARE` is the switch. To silence access
+lines in one environment without touching `MIDDLEWARE`, raise the logger's level:
+
+```python
+LOGGING = build_logging_config(
+    extra_loggers={"harry.request": {"level": "WARNING", "handlers": ["console"], "propagate": False}},
+)
+```
+
+#### Ignoring noise endpoints
+
+Requests whose path is in `REQUEST_LOG_IGNORE_PATHS` get no access line. Entries ending
+in `/` match as path prefixes; all other entries match exactly — never by substring, so
+an entry can't silently swallow a real route. The default:
+
+```python
+REQUEST_LOG_IGNORE_PATHS = {
+    "/favicon.ico",
+    "/robots.txt",
+    "/apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png",
+    "/.well-known/",   # trailing slash → prefix match
+}
+```
+
+Healthcheck paths are deliberately *not* ignored: a probe every 30 seconds is a useful
+status/latency heartbeat in SigNoz. If you find it too chatty, add your healthcheck path
+to the set (overriding replaces the default set wholesale).
+
+### Correlating logs with traces
+
+Enable OpenTelemetry's Django and logging instrumentation and every log line — access
+lines included — carries the request's `trace_id`/`span_id`, which harry's JSON formatter
+emits and SigNoz uses to link logs to traces. The quickest path today:
+
+```bash
+pip install opentelemetry-distro opentelemetry-exporter-otlp
+opentelemetry-bootstrap -a install   # detects Django etc. and installs instrumentations
+```
+
+```bash
+OTEL_SERVICE_NAME=myapp \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod \
+OTEL_PYTHON_LOG_CORRELATION=true \
+opentelemetry-instrument gunicorn myproject.wsgi
+```
+
+`OTEL_PYTHON_LOG_CORRELATION=true` is the piece that stamps trace ids onto log records;
+without it you get traces but uncorrelated logs.
+
+### One trace across the full lifecycle
+
+For the proxy, app server, and Django to share a single trace id, the proxy must *join
+the trace*. With Caddy, that's the `tracing` directive:
+
+```
+example.com {
+    tracing
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+Caddy continues an inbound W3C trace context or starts a new trace, exports its own span
+(honoring the standard `OTEL_EXPORTER_OTLP_*` / `OTEL_SERVICE_NAME` env vars), injects
+`traceparent` into the proxied request — so Django's instrumentation continues the same
+trace — and stamps `traceID`/`spanID` onto its own access logs. The result in SigNoz:
+Caddy's span, Django's spans, and every app log line share one trace id.
+
+To also surface the id in gunicorn's access log:
+
+```python
+# gunicorn.conf.py
+access_log_format = '%(h)s "%(r)s" %(s)s %(b)s %(D)sus traceparent=%({traceparent}i)s'
+```
+
+**Caveat:** without Caddy `tracing` (or another tracing proxy), the trace originates in
+Django — requests still trace and logs still correlate, but the proxy hop is not part of
+the trace. "One id, full lifecycle" specifically requires the proxy to participate.
