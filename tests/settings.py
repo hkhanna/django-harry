@@ -12,6 +12,8 @@ INSTALLED_APPS = [
     "harry.email",
 ]
 
+ROOT_URLCONF = "tests.urls"
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

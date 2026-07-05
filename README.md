@@ -674,3 +674,36 @@ access_log_format = '%(h)s "%(r)s" %(s)s %(b)s %(D)sus traceparent=%({traceparen
 **Caveat:** without Caddy `tracing` (or another tracing proxy), the trace originates in
 Django — requests still trace and logs still correlate, but the proxy hop is not part of
 the trace. "One id, full lifecycle" specifically requires the proxy to participate.
+
+## Health endpoint
+
+harry ships one shared healthcheck view so "is it up, can it reach its database" is
+answered identically in every project. It's the target for an **external uptime
+monitor** — the one alert internal tooling can't provide. Wire it yourself (nothing
+registers the URL automatically):
+
+```python
+from django.urls import path
+
+from harry.views import health
+
+urlpatterns = [
+    # ...
+    path("health/", health),
+]
+```
+
+An unauthenticated `GET /health/` (no CSRF token needed) returns `200` with
+`{"status": "ok"}` when the default database answers `SELECT 1`, and `503` with
+`{"status": "error", "detail": "database unavailable"}` when it doesn't — never a
+stack trace or connection string. The check is deliberately database-only: cache,
+storage, and external-API checks make healthchecks flaky and page you for
+dependencies that have their own monitoring.
+
+Point your uptime monitor at the URL as a deployment step; expect probes every
+15–30 seconds — the view is fast and side-effect free.
+
+Healthcheck probes *do* get access lines from `RequestLogMiddleware` (the path is
+deliberately not in the default ignore set), giving you a steady status/latency
+heartbeat in SigNoz. If that's too chatty, add your health path to
+`REQUEST_LOG_IGNORE_PATHS` (see "Ignoring noise endpoints" above).
