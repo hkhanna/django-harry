@@ -224,6 +224,16 @@ def test_json_formatter_omits_trace_fields_when_absent():
     assert "span_id" not in data
 
 
+def test_json_formatter_omits_placeholder_trace_fields():
+    # Outside any span, OpenTelemetry's logging instrumentation stamps "0" rather
+    # than omitting the attributes; the placeholders must not be emitted.
+    record = make_record(otelTraceID="0", otelSpanID="0", otelServiceName="svc")
+    data = json.loads(JSONFormatter().format(record))
+    assert "trace_id" not in data
+    assert "span_id" not in data
+    assert data["service.name"] == "svc"
+
+
 # Integration: the produced config is accepted by dictConfig and emits JSON
 
 
