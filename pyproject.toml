@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "harry"
 version = "0.1.0"
-description = "Orgs, emails, and events for Django"
+description = "Email, logging, and observability primitives for Django projects"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

@@ -1,55 +1,51 @@
 # harry
 
-Orgs, emails, and events for Django
+Email, logging, and observability primitives for Django projects.
 
-## Development
+harry is a set of independent modules that share one package. Each module is
+adoptable on its own — installing the package costs nothing until you wire a
+module into your settings, and no module requires another. The goal is that
+every project that installs harry sends email, logs, and answers "is it up?"
+the same way.
+
+| Module | What it does | Needs |
+|---|---|---|
+| [`harry.email`](#email) | Transactional email via anymail, persisted to your database with delivery tracking | anymail + a transactional ESP |
+| [`harry.logconfig`](#logging) | Structured logging config: readable in development, JSON in production | nothing (stdlib only) |
+| [`harry.middleware`](#request-logging) | One structured access log line per request | nothing |
+| [`harry.views.health`](#health-endpoint) | DB-checking healthcheck endpoint | nothing |
+| [`harry.observability`](#tracing) | OpenTelemetry tracing + log↔trace correlation (optional) | the `harry[otel]` extra |
+
+## Installation
+
+harry is not on PyPI; install it from git. In the consuming project's
+`pyproject.toml`:
+
+```toml
+dependencies = [
+    "harry @ git+https://github.com/hkhanna/django-harry",
+]
+```
+
+If the project will use [Tracing](#tracing), install the `otel` extra instead:
+
+```toml
+dependencies = [
+    "harry[otel] @ git+https://github.com/hkhanna/django-harry",
+]
+```
+
+## Email
+
+Transactional email through [django-anymail](https://anymail.dev/), with every
+message persisted as an `EmailMessage` record in your database and delivery
+tracked via ESP webhooks.
+
+**Requires:** anymail and a transactional ESP account. Nothing else from harry.
 
 ### Setup
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
-
-```bash
-# Install dependencies (--all-extras so the OpenTelemetry integration tests run)
-uv sync --all-extras
-```
-
-### Running Tests
-
-```bash
-uv run pytest
-```
-
-### Code Quality
-
-Format and lint code:
-
-```bash
-make format
-```
-
-Run type checking:
-
-```bash
-make mypy
-```
-
-### Database Migrations
-
-Create new migrations:
-
-```bash
-make migrations
-```
-
-## Usage
-
-### Installation
-
-```bash
-pip install harry
-```
-
-### 1. Add to INSTALLED_APPS
+#### 1. Add to INSTALLED_APPS
 
 ```python
 INSTALLED_APPS = [
@@ -59,10 +55,10 @@ INSTALLED_APPS = [
 ]
 ```
 
-### 2. Configure your email provider
+#### 2. Configure your email provider
 
-harry uses [django-anymail](https://anymail.dev/) to send email through any
-transactional ESP. Configure your provider in `settings.py`:
+harry uses anymail to send email through any transactional ESP. Configure your
+provider in `settings.py`:
 
 ```python
 # Example using Mailgun
@@ -71,13 +67,12 @@ ANYMAIL = {
     "MAILGUN_API_KEY": env("MAILGUN_API_KEY"),
     "MAILGUN_WEBHOOK_SIGNING_KEY": env("MAILGUN_WEBHOOK_SIGNING_KEY")
 }
-
 ```
 
 See the [anymail docs](https://anymail.dev/en/stable/) for the full list of
 supported providers and their settings.
 
-### 3. Configure site defaults
+#### 3. Configure site defaults
 
 harry pulls sender defaults and template context from a `SITE_CONFIG` dict in
 settings. Values here are used as fallbacks when not provided per-message.
@@ -98,7 +93,7 @@ SITE_CONFIG = {
 MAX_SUBJECT_LENGTH = 78  # Subjects are truncated to this length
 ```
 
-### 4. Create email templates
+#### 4. Create email templates
 
 Each email needs a template prefix that maps to template files in your Django
 template directories:
@@ -125,16 +120,53 @@ Thanks,
 {{ company_city_state_zip }}
 ```
 
-### 5. Run migrations
+#### 5. Run migrations
 
 ```bash
 python manage.py migrate
 ```
 
-### Sending email
+#### 6. Set up delivery tracking webhooks (optional)
 
-The primary API is a set of service functions. Every email sent is persisted as
-an `EmailMessage` record in your database.
+harry stores webhook events from your ESP so you can track whether emails were
+delivered, opened, bounced, or marked as spam. Add anymail's webhook URLs to
+your root `urls.py`:
+
+```python
+from django.urls import include, path
+
+urlpatterns = [
+    # ...
+    path("anymail/", include("anymail.urls")),
+]
+```
+
+Then configure a webhook secret in settings:
+
+```python
+ANYMAIL = {
+    "MAILGUN_API_KEY": env("MAILGUN_API_KEY"),
+    "MAILGUN_WEBHOOK_SIGNING_KEY": env("MAILGUN_WEBHOOK_SIGNING_KEY")
+    "WEBHOOK_SECRET": env("ANYMAIL_WEBHOOK_SECRET"),
+}
+```
+
+Generate a webhook secret:
+
+```bash
+python -c "from django.utils.crypto import get_random_string; print(':'.join(get_random_string(16) for _ in range(2)))"
+```
+
+Register the webhook URL with your ESP, using the secret as HTTP basic auth
+credentials:
+
+```
+https://<part1>:<part2>@yourdomain.com/anymail/mailgun/tracking/
+```
+
+### Usage
+
+The primary API is a set of service functions.
 
 #### Basic send
 
@@ -273,48 +305,30 @@ duplicate = email_message_duplicate(original=email)
 email_message_queue(email_message=duplicate)
 ```
 
-### Tracking delivery with webhooks
+#### Querying email history
 
-harry stores webhook events from your ESP so you can track whether emails were
-delivered, opened, bounced, or marked as spam.
-
-#### 1. Set up anymail webhook URLs
-
-Add anymail's webhook URLs to your root `urls.py`:
+All emails are persisted as Django model instances:
 
 ```python
-from django.urls import include, path
+from harry.email.models import EmailMessage
 
-urlpatterns = [
-    # ...
-    path("anymail/", include("anymail.urls")),
-]
+# All emails to a recipient
+EmailMessage.objects.filter(to_email="alice@example.com")
+
+# Failed emails
+EmailMessage.objects.filter(status="error")
+
+# Bounced emails in the last 24 hours
+from django.utils import timezone
+from datetime import timedelta
+
+EmailMessage.objects.filter(
+    status="bounced",
+    sent_at__gte=timezone.now() - timedelta(hours=24),
+)
 ```
 
-Then configure a webhook secret in settings:
-
-```python
-ANYMAIL = {
-    "MAILGUN_API_KEY": env("MAILGUN_API_KEY"),
-    "MAILGUN_WEBHOOK_SIGNING_KEY": env("MAILGUN_WEBHOOK_SIGNING_KEY")
-    "WEBHOOK_SECRET": env("ANYMAIL_WEBHOOK_SECRET"),
-}
-```
-
-Generate a webhook secret:
-
-```bash
-python -c "from django.utils.crypto import get_random_string; print(':'.join(get_random_string(16) for _ in range(2)))"
-```
-
-Register the webhook URL with your ESP, using the secret as HTTP basic auth
-credentials:
-
-```
-https://<part1>:<part2>@yourdomain.com/anymail/mailgun/tracking/
-```
-
-### Email status lifecycle
+### Reference: email status lifecycle
 
 Every `EmailMessage` moves through these statuses:
 
@@ -350,34 +364,15 @@ Unrecognized ESP event types are stored as `UNKNOWN`.
 | `CANCELED` | Suppressed by cooldown |
 | `ERROR` | Something went wrong during preparation or sending |
 
-### Querying email history
-
-All emails are persisted as Django model instances:
-
-```python
-from harry.email.models import EmailMessage
-
-# All emails to a recipient
-EmailMessage.objects.filter(to_email="alice@example.com")
-
-# Failed emails
-EmailMessage.objects.filter(status="error")
-
-# Bounced emails in the last 24 hours
-from django.utils import timezone
-from datetime import timedelta
-
-EmailMessage.objects.filter(
-    status="bounced",
-    sent_at__gte=timezone.now() - timedelta(hours=24),
-)
-```
-
 ## Logging
 
-harry ships a reusable logging configuration so every project that installs it logs the same
-way. It has no extra dependencies: it builds a standard Django
-[`LOGGING`](https://docs.djangoproject.com/en/5.2/topics/logging/) dictionary.
+A reusable logging configuration so every project that installs harry logs the
+same way: human-readable console output in development, structured JSON in
+production.
+
+**Requires:** nothing. It has no extra dependencies — it builds a standard
+Django [`LOGGING`](https://docs.djangoproject.com/en/5.2/topics/logging/)
+dictionary from stdlib logging.
 
 ### Setup
 
@@ -399,7 +394,7 @@ That's it. By default the configuration:
 - configures the `django`, `django.request`, `django.security`, and `harry` loggers plus the
   root logger.
 
-### Configuration
+### Reference: configuration
 
 `build_logging_config()` resolves each setting from its keyword argument, then an environment
 variable, then a per-environment default:
@@ -431,94 +426,23 @@ A production log line looks like:
 
 Anything you pass via `logger.info("…", extra={"message_id": mid})` is merged into the JSON.
 
-### Shipping logs to SigNoz (production)
+Where the JSON goes after stdout is a deployment concern, not a logging one —
+see "[Deployment](#deployment-shipping-logs-and-traces-to-signoz)".
 
-The production assumption is [SigNoz](https://signoz.io/). Because you'll already run an
-OpenTelemetry Collector on the host for OS/VPS metrics and system logs, the simplest setup is
-to let that **same Collector** pick up the application logs — no OpenTelemetry packages in the
-app itself.
+## Request logging
 
-1. Run Django under **systemd** (e.g. gunicorn). harry's JSON goes to stdout, which systemd
-   captures in the **journal**.
-2. Install the OpenTelemetry Collector on the host and give it one pipeline for host metrics
-   and one for logs. Sketch:
+`RequestLogMiddleware` emits one structured access line per request — readable
+in development (`GET /invoices/42 200 (12ms)`), structured in production:
 
-   ```yaml
-   receivers:
-     hostmetrics:
-       collection_interval: 60s
-       scrapers: { cpu: {}, memory: {}, disk: {}, filesystem: {}, load: {}, network: {} }
-     journald:
-       units: [your-django.service]      # or a `filelog` receiver if you log to a file
-       start_at: end
-       operators:
-         # journald delivers the entry as a map; collapse it to the MESSAGE line...
-         - type: move
-           from: body.MESSAGE
-           to: body
-           if: 'body.MESSAGE != nil'
-         # ...then parse harry's JSON. Recover the real severity from the `level`
-         # field — journald otherwise stamps everything on stdout as INFO, which
-         # would flatten an app ERROR to INFO in SigNoz.
-         - type: json_parser
-           if: 'body != nil and body matches "^[{]"'
-           parse_from: body
-           parse_to: attributes
-           severity:
-             parse_from: attributes.level
-             mapping: { debug: DEBUG, info: INFO, warn: WARNING, error: ERROR, fatal: CRITICAL }
-         # Surface the human message as the log body in SigNoz (level/logger/func/
-         # lineno and any extras remain queryable attributes).
-         - type: move
-           from: attributes.msg
-           to: body
-           if: 'attributes.msg != nil'
-   processors:
-     resourcedetection: { detectors: [system] }
-     batch: {}
-   exporters:
-     otlp:
-       endpoint: ingest.<region>.signoz.cloud:443
-       headers: { signoz-ingestion-key: "${env:SIGNOZ_INGESTION_KEY}" }
-   service:
-     pipelines:
-       logs:    { receivers: [journald],    processors: [resourcedetection, batch], exporters: [otlp] }
-       metrics: { receivers: [hostmetrics], processors: [resourcedetection, batch], exporters: [otlp] }
-   ```
+```json
+{"ts": "…", "level": "INFO", "logger": "harry.request", "msg": "GET /invoices/42 200 (12ms)",
+ "method": "GET", "path": "/invoices/42", "status": 200, "duration_ms": 12, "user_id": 7}
+```
 
-   The two pieces that matter: the `json_parser` recovers severity from harry's `level`
-   field (without it, journald reports every line as INFO), and moving `msg` to the body
-   gives a clean message in SigNoz with everything else as attributes. If you also emit
-   `trace_id`/`span_id` (see below), they flow through `parse_to: attributes` and SigNoz
-   correlates the log with its trace. See the SigNoz docs for the authoritative configuration:
-   [install the Collector on a VM](https://signoz.io/docs/opentelemetry-collection-agents/vm/install/),
-   [host metrics](https://signoz.io/docs/infrastructure-monitoring/hostmetrics/),
-   [systemd/journald logs](https://signoz.io/docs/logs-management/send-logs/collect-systemd-logs/),
-   [logs from a file](https://signoz.io/docs/userguide/collect_logs_from_file/).
+**Requires:** nothing — it works with any `LOGGING` configuration, though the
+structured output shown assumes [harry's logging config](#logging).
 
-**Trace↔log correlation.** harry's JSON formatter emits `trace_id`/`span_id`/`service.name`
-whenever OpenTelemetry has populated them on the log record. So if you later add tracing
-(installing `harry[otel]` and calling `init_observability()` in settings), your
-Collector-shipped logs automatically correlate with traces in SigNoz — no in-app log
-exporter and no change to harry required. See "Request logging & tracing" below for the
-full setup.
-
-## Request logging & tracing
-
-harry can log one structured access line per request and — with OpenTelemetry — tie every
-log line to a distributed trace that spans reverse proxy, app server, and Django.
-
-**Required vs. optional.** Everything in this section beyond the middleware itself is an
-optional enhancer, not a prerequisite:
-
-| Tool | Required? | Notes |
-|---|---|---|
-| OpenTelemetry | No | With it, every log line carries `trace_id` and links to its trace in SigNoz. Without it, the middleware still logs fully. No OpenTelemetry package is a hard dependency of harry — they live in the opt-in `harry[otel]` extra. |
-| Caddy | No | Any reverse proxy, or none. Caddy's `tracing` is only needed for proxy↔app trace correlation. |
-| gunicorn | No | Any WSGI/ASGI server. The snippet below is just an example of surfacing `traceparent` at the server layer. |
-| SigNoz / OTel Collector | No | harry only writes JSON to stdout; shipping it anywhere is a deployment choice. |
-
-### Access logging
+### Setup
 
 Add the middleware to `MIDDLEWARE`, after `AuthenticationMiddleware` (it reads
 `request.user`):
@@ -532,23 +456,7 @@ MIDDLEWARE = [
 ]
 ```
 
-Each request emits one line at `INFO` on the `harry.request` logger — readable in
-development (`GET /invoices/42 200 (12ms)`), structured in production:
-
-```json
-{"ts": "…", "level": "INFO", "logger": "harry.request", "msg": "GET /invoices/42 200 (12ms)",
- "method": "GET", "path": "/invoices/42", "status": 200, "duration_ms": 12, "user_id": 7}
-```
-
-Field notes:
-
-- `duration_ms` measures middleware entry to response return — for streaming responses
-  that is time-to-headers, not time-to-last-byte.
-- `user_id` is the authenticated user's primary key, else `null`.
-- Client IP, user agent, and response size are deliberately absent — your reverse proxy's
-  access log owns those. The query string is also excluded: it's the classic place
-  password-reset tokens and magic links leak into logs. The request id concept is absent
-  too — when tracing is on, `trace_id` is the per-request id on every line.
+Each request now emits one line at `INFO` on the `harry.request` logger.
 
 There is no on/off setting: membership in `MIDDLEWARE` is the switch. To silence access
 lines in one environment without touching `MIDDLEWARE`, raise the logger's level:
@@ -558,6 +466,18 @@ LOGGING = build_logging_config(
     extra_loggers={"harry.request": {"level": "WARNING", "handlers": ["console"], "propagate": False}},
 )
 ```
+
+### Reference: fields and ignore paths
+
+Field notes:
+
+- `duration_ms` measures middleware entry to response return — for streaming responses
+  that is time-to-headers, not time-to-last-byte.
+- `user_id` is the authenticated user's primary key, else `null`.
+- Client IP, user agent, and response size are deliberately absent — your reverse proxy's
+  access log owns those. The query string is also excluded: it's the classic place
+  password-reset tokens and magic links leak into logs. The request id concept is absent
+  too — when [tracing](#tracing) is on, `trace_id` is the per-request id on every line.
 
 #### Ignoring noise endpoints
 
@@ -576,18 +496,71 @@ REQUEST_LOG_IGNORE_PATHS = {
 ```
 
 Healthcheck paths are deliberately *not* ignored: a probe every 30 seconds is a useful
-status/latency heartbeat in SigNoz. If you find it too chatty, add your healthcheck path
+status/latency heartbeat. If you find it too chatty, add your healthcheck path
 to the set (overriding replaces the default set wholesale).
 
-### Correlating logs with traces
+## Health endpoint
 
-Install harry's `otel` extra and call `init_observability()` in `settings.py`, and every
-log line — access lines included — carries the request's `trace_id`/`span_id`, which
-harry's JSON formatter emits and SigNoz uses to link logs to traces:
+One shared healthcheck view so "is it up, can it reach its database" is
+answered identically in every project. It's the target for an **external uptime
+monitor** — the one alert internal tooling can't provide.
 
-```bash
-pip install "harry[otel]"
+**Requires:** nothing.
+
+### Setup
+
+Wire it yourself (nothing registers the URL automatically):
+
+```python
+from django.urls import path
+
+from harry.views import health
+
+urlpatterns = [
+    # ...
+    path("health/", health),
+]
 ```
+
+An unauthenticated `GET /health/` (no CSRF token needed) returns `200` with
+`{"status": "ok"}` when the default database answers `SELECT 1`, and `503` with
+`{"status": "error", "detail": "database unavailable"}` when it doesn't — never a
+stack trace or connection string. The check is deliberately database-only: cache,
+storage, and external-API checks make healthchecks flaky and page you for
+dependencies that have their own monitoring.
+
+Point your uptime monitor at the URL as a deployment step; expect probes every
+15–30 seconds — the view is fast and side-effect free.
+
+Healthcheck probes *do* get access lines from `RequestLogMiddleware` (the path is
+deliberately not in the default ignore set), giving you a steady status/latency
+heartbeat. If that's too chatty, add your health path to
+`REQUEST_LOG_IGNORE_PATHS` (see
+"[Ignoring noise endpoints](#ignoring-noise-endpoints)" above).
+
+## Tracing
+
+Everything so far works without OpenTelemetry. This module is the opt-in
+enhancer: with it, every request gets a distributed trace, and every log line —
+access lines included — carries the request's `trace_id`/`span_id`, so your
+logs link to their traces. Without it, nothing above loses any functionality.
+
+**Requires:** the `harry[otel]` extra (see [Installation](#installation)). No
+OpenTelemetry package is a hard dependency of harry. Enhances
+[Logging](#logging) and [Request logging](#request-logging); required by
+neither.
+
+### Setup
+
+Install the extra:
+
+```toml
+dependencies = [
+    "harry[otel] @ git+https://github.com/hkhanna/django-harry",
+]
+```
+
+Call `init_observability()` in `settings.py`:
 
 ```python
 # settings.py
@@ -646,6 +619,91 @@ without it you get traces but uncorrelated logs.
 
 </details>
 
+## Deployment: shipping logs and traces to SigNoz
+
+harry only writes JSON to stdout; shipping it anywhere is a deployment choice,
+made on the server rather than in the app. The production assumption is
+[SigNoz](https://signoz.io/). This section covers the pieces that live outside
+the app process: the host's OpenTelemetry Collector and the reverse proxy.
+
+### Shipping logs with the host Collector
+
+Because you'll already run an OpenTelemetry Collector on the host for OS/VPS
+metrics and system logs, the simplest setup is to let that **same Collector**
+pick up the application logs — no OpenTelemetry packages needed in the app
+itself:
+
+1. Run Django under **systemd** (e.g. gunicorn). harry's JSON goes to stdout, which systemd
+   captures in the **journal**.
+2. Install the OpenTelemetry Collector on the host and give it one pipeline for host metrics
+   and one for logs (full sketch below).
+
+Two operators in the log pipeline do the real work:
+
+- **Recover severity from harry's `level` field.** journald stamps everything on
+  stdout as INFO, which would flatten an app ERROR to INFO in SigNoz — a
+  `json_parser` operator re-parses the real level out of harry's JSON.
+- **Move `msg` to the log body.** This gives a clean human message in SigNoz,
+  with level/logger and any `extra` fields remaining as queryable attributes.
+
+If the app also emits `trace_id`/`span_id` (see [Tracing](#tracing)), they flow
+through the same JSON parsing and SigNoz correlates each log line with its
+trace — no in-app log exporter and no change to harry required.
+
+<details>
+<summary>Collector configuration sketch</summary>
+
+```yaml
+receivers:
+  hostmetrics:
+    collection_interval: 60s
+    scrapers: { cpu: {}, memory: {}, disk: {}, filesystem: {}, load: {}, network: {} }
+  journald:
+    units: [your-django.service]      # or a `filelog` receiver if you log to a file
+    start_at: end
+    operators:
+      # journald delivers the entry as a map; collapse it to the MESSAGE line...
+      - type: move
+        from: body.MESSAGE
+        to: body
+        if: 'body.MESSAGE != nil'
+      # ...then parse harry's JSON. Recover the real severity from the `level`
+      # field — journald otherwise stamps everything on stdout as INFO, which
+      # would flatten an app ERROR to INFO in SigNoz.
+      - type: json_parser
+        if: 'body != nil and body matches "^[{]"'
+        parse_from: body
+        parse_to: attributes
+        severity:
+          parse_from: attributes.level
+          mapping: { debug: DEBUG, info: INFO, warn: WARNING, error: ERROR, fatal: CRITICAL }
+      # Surface the human message as the log body in SigNoz (level/logger/func/
+      # lineno and any extras remain queryable attributes).
+      - type: move
+        from: attributes.msg
+        to: body
+        if: 'attributes.msg != nil'
+processors:
+  resourcedetection: { detectors: [system] }
+  batch: {}
+exporters:
+  otlp:
+    endpoint: ingest.<region>.signoz.cloud:443
+    headers: { signoz-ingestion-key: "${env:SIGNOZ_INGESTION_KEY}" }
+service:
+  pipelines:
+    logs:    { receivers: [journald],    processors: [resourcedetection, batch], exporters: [otlp] }
+    metrics: { receivers: [hostmetrics], processors: [resourcedetection, batch], exporters: [otlp] }
+```
+
+</details>
+
+See the SigNoz docs for the authoritative configuration:
+[install the Collector on a VM](https://signoz.io/docs/opentelemetry-collection-agents/vm/install/),
+[host metrics](https://signoz.io/docs/infrastructure-monitoring/hostmetrics/),
+[systemd/journald logs](https://signoz.io/docs/logs-management/send-logs/collect-systemd-logs/),
+[logs from a file](https://signoz.io/docs/userguide/collect_logs_from_file/).
+
 ### One trace across the full lifecycle
 
 For the proxy, app server, and Django to share a single trace id, the proxy must *join
@@ -671,42 +729,10 @@ To also surface the id in gunicorn's access log:
 access_log_format = '%(h)s "%(r)s" %(s)s %(b)s %(D)sus traceparent=%({traceparent}i)s'
 ```
 
-**Caveat:** without Caddy `tracing` (or another tracing proxy), the trace originates in
+Neither piece is required: any reverse proxy (or none) and any WSGI/ASGI server
+work. Without Caddy `tracing` (or another tracing proxy), the trace originates in
 Django — requests still trace and logs still correlate, but the proxy hop is not part of
 the trace. "One id, full lifecycle" specifically requires the proxy to participate.
-
-## Health endpoint
-
-harry ships one shared healthcheck view so "is it up, can it reach its database" is
-answered identically in every project. It's the target for an **external uptime
-monitor** — the one alert internal tooling can't provide. Wire it yourself (nothing
-registers the URL automatically):
-
-```python
-from django.urls import path
-
-from harry.views import health
-
-urlpatterns = [
-    # ...
-    path("health/", health),
-]
-```
-
-An unauthenticated `GET /health/` (no CSRF token needed) returns `200` with
-`{"status": "ok"}` when the default database answers `SELECT 1`, and `503` with
-`{"status": "error", "detail": "database unavailable"}` when it doesn't — never a
-stack trace or connection string. The check is deliberately database-only: cache,
-storage, and external-API checks make healthchecks flaky and page you for
-dependencies that have their own monitoring.
-
-Point your uptime monitor at the URL as a deployment step; expect probes every
-15–30 seconds — the view is fast and side-effect free.
-
-Healthcheck probes *do* get access lines from `RequestLogMiddleware` (the path is
-deliberately not in the default ignore set), giving you a steady status/latency
-heartbeat in SigNoz. If that's too chatty, add your health path to
-`REQUEST_LOG_IGNORE_PATHS` (see "Ignoring noise endpoints" above).
 
 ## Observability conventions
 
@@ -751,8 +777,7 @@ setup. The rationale is recorded in
 
 **Always bind identifying context.** Every event carries `user_id` and the primary
 entity id involved (`order_id`, `message_id`, …). Request-level correlation comes from
-`trace_id` (stamped by OpenTelemetry, see
-"[Correlating logs with traces](#correlating-logs-with-traces)"), not from hand-added
+`trace_id` (stamped by OpenTelemetry, see "[Tracing](#tracing)"), not from hand-added
 request-id fields.
 
 **Never log secrets** — tokens, query strings, or full request bodies. These are the
@@ -796,20 +821,83 @@ configured per project at launch (see the checklist below).
   3. p95 latency above threshold
   4. External uptime check on `/health/` (see "[Health endpoint](#health-endpoint)")
 
-### Per-project launch checklist
+## Per-project integration checklist
 
-- [ ] `LOGGING = build_logging_config()` in settings; `DJANGO_ENV=prod` set in
-      production ("[Logging](#logging)")
+Everything harry needs from a project that installs it. Each group maps to one
+feature — skip the group if the project skips the feature. Items are terse on
+purpose; the linked section is the source of *how*.
+
+**Email** ("[Email](#email)")
+
+- [ ] `anymail` and `harry.email` in `INSTALLED_APPS`; ESP configured via `EMAIL_BACKEND` + `ANYMAIL`
+- [ ] `SITE_CONFIG` and `MAX_SUBJECT_LENGTH` set
+- [ ] Email templates created (`*_subject.txt`, `*_message.txt`)
+- [ ] Migrations run
+- [ ] Anymail webhook URLs wired; webhook secret registered with the ESP
+
+**Logging** ("[Logging](#logging)")
+
+- [ ] `LOGGING = build_logging_config()` in settings
+- [ ] `DJANGO_ENV=prod` set in production
+
+**Request logging** ("[Request logging](#request-logging)")
+
+- [ ] `RequestLogMiddleware` in `MIDDLEWARE`, after `AuthenticationMiddleware`
+
+**Health endpoint** ("[Health endpoint](#health-endpoint)")
+
+- [ ] `/health/` wired in `urls.py`
+
+**Tracing** ("[Tracing](#tracing)")
+
 - [ ] `harry[otel]` installed; `init_observability()` called in settings
-      ("[Correlating logs with traces](#correlating-logs-with-traces)")
 - [ ] `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and
       `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=…` set
-- [ ] `RequestLogMiddleware` installed ("[Access logging](#access-logging)"); access
-      lines visible in SigNoz
-- [ ] Traces and exceptions visible in SigNoz; log lines carry `trace_id`
-- [ ] `/health/` wired ("[Health endpoint](#health-endpoint)") and registered with the
-      external uptime monitor
+
+**Launch — configured outside the code** ("[Deployment](#deployment-shipping-logs-and-traces-to-signoz)",
+"[Alerting principles](#alerting-principles)")
+
+- [ ] Access lines and traces visible in SigNoz; log lines carry `trace_id`
+- [ ] `/health/` registered with the external uptime monitor
 - [ ] The four standard alerts configured in SigNoz
-      ("[Alerting principles](#alerting-principles)")
 - [ ] Cron/scheduled jobs ping [Healthchecks.io](https://healthchecks.io/) on
       completion
+
+## Development
+
+### Setup
+
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+
+```bash
+# Install dependencies (--all-extras so the OpenTelemetry integration tests run)
+uv sync --all-extras
+```
+
+### Running Tests
+
+```bash
+uv run pytest
+```
+
+### Code Quality
+
+Format and lint code:
+
+```bash
+make format
+```
+
+Run type checking:
+
+```bash
+make mypy
+```
+
+### Database Migrations
+
+Create new migrations:
+
+```bash
+make migrations
+```
