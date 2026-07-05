@@ -56,8 +56,10 @@ class JSONFormatter(logging.Formatter):
         }
 
         # Trace correlation fields, only when OpenTelemetry has populated them.
+        # Outside any span the logging instrumentation stamps the placeholder "0"
+        # rather than omitting the attribute; treat that as absent.
         for attr, key in _OTEL_ATTRS.items():
-            if key and (value := getattr(record, attr, None)):
+            if key and (value := getattr(record, attr, None)) and value != "0":
                 payload[key] = value
 
         # Anything passed via ``logger.info(..., extra={...})``. Keys already in the

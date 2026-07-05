@@ -9,8 +9,8 @@ Orgs, emails, and events for Django
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-# Install dependencies
-uv sync
+# Install dependencies (--all-extras so the OpenTelemetry integration tests run)
+uv sync --all-extras
 ```
 
 ### Running Tests
@@ -498,8 +498,8 @@ app itself.
 
 **Trace↔log correlation.** harry's JSON formatter emits `trace_id`/`span_id`/`service.name`
 whenever OpenTelemetry has populated them on the log record. So if you later add tracing
-(running the app under `opentelemetry-instrument` with the `OTEL_*` environment variables),
-your Collector-shipped logs automatically correlate with traces in SigNoz — no in-app log
+(installing `harry[otel]` and calling `init_observability()` in settings), your
+Collector-shipped logs automatically correlate with traces in SigNoz — no in-app log
 exporter and no change to harry required. See "Request logging & tracing" below for the
 full setup.
 
@@ -513,7 +513,7 @@ optional enhancer, not a prerequisite:
 
 | Tool | Required? | Notes |
 |---|---|---|
-| OpenTelemetry | No | With it, every log line carries `trace_id` and links to its trace in SigNoz. Without it, the middleware still logs fully. No OpenTelemetry package is a dependency of harry. |
+| OpenTelemetry | No | With it, every log line carries `trace_id` and links to its trace in SigNoz. Without it, the middleware still logs fully. No OpenTelemetry package is a hard dependency of harry — they live in the opt-in `harry[otel]` extra. |
 | Caddy | No | Any reverse proxy, or none. Caddy's `tracing` is only needed for proxy↔app trace correlation. |
 | gunicorn | No | Any WSGI/ASGI server. The snippet below is just an example of surfacing `traceparent` at the server layer. |
 | SigNoz / OTel Collector | No | harry only writes JSON to stdout; shipping it anywhere is a deployment choice. |
@@ -581,9 +581,52 @@ to the set (overriding replaces the default set wholesale).
 
 ### Correlating logs with traces
 
-Enable OpenTelemetry's Django and logging instrumentation and every log line — access
-lines included — carries the request's `trace_id`/`span_id`, which harry's JSON formatter
-emits and SigNoz uses to link logs to traces. The quickest path today:
+Install harry's `otel` extra and call `init_observability()` in `settings.py`, and every
+log line — access lines included — carries the request's `trace_id`/`span_id`, which
+harry's JSON formatter emits and SigNoz uses to link logs to traces:
+
+```bash
+pip install "harry[otel]"
+```
+
+```python
+# settings.py
+from harry.observability import init_observability
+
+init_observability()  # OTEL_SERVICE_NAME + OTEL_EXPORTER_OTLP_ENDPOINT from env
+```
+
+```bash
+OTEL_SERVICE_NAME=myapp \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod \
+gunicorn myproject.wsgi
+```
+
+That one call wires everything:
+
+- a `TracerProvider` with an OTLP span exporter — endpoint, headers, and protocol (gRPC
+  by default; set `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` for HTTP) come from the
+  standard `OTEL_EXPORTER_OTLP_*` env vars, the service name from the argument
+  (`init_observability(service_name="myapp")`) or `OTEL_SERVICE_NAME`;
+- Django, psycopg, and requests instrumentation — each enabled only when the library is
+  installed;
+- log↔trace correlation — trace ids are stamped onto every `LogRecord`, and harry's JSON
+  formatter promotes them to `trace_id`/`span_id`/`service.name`.
+
+Because initialization is programmatic — there is no `opentelemetry-instrument` wrapper —
+the same `settings.py` works identically under gunicorn, `manage.py` commands, and any
+future task runner without changing how processes are launched. Calling it twice (e.g.
+under the autoreloader) is a no-op, and calling it without the extra installed raises an
+`ImportError` that tells you to install `harry[otel]`. The extra is also the single place
+the interdependent `opentelemetry-*` package versions are managed — don't pin them
+yourself.
+
+<details>
+<summary>Manual path (without the <code>harry[otel]</code> extra)</summary>
+
+To assemble your own instrumentation set instead, OpenTelemetry's zero-code path works
+with harry unchanged — the formatter promotes the trace ids either way:
 
 ```bash
 pip install opentelemetry-distro opentelemetry-exporter-otlp
@@ -600,6 +643,8 @@ opentelemetry-instrument gunicorn myproject.wsgi
 
 `OTEL_PYTHON_LOG_CORRELATION=true` is the piece that stamps trace ids onto log records;
 without it you get traces but uncorrelated logs.
+
+</details>
 
 ### One trace across the full lifecycle
 
