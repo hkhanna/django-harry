@@ -707,3 +707,109 @@ Healthcheck probes *do* get access lines from `RequestLogMiddleware` (the path i
 deliberately not in the default ignore set), giving you a steady status/latency
 heartbeat in SigNoz. If that's too chatty, add your health path to
 `REQUEST_LOG_IGNORE_PATHS` (see "Ignoring noise endpoints" above).
+
+## Observability conventions
+
+The sections above document the machinery harry ships. This section is the standard for
+how projects that install harry *use* it — what the code should do, plus the launch
+steps that can't be code (SigNoz alerts, uptime monitors, cron pings). This README is
+the canonical home for these conventions: it travels with the package into every
+project, so a consuming project's `CLAUDE.md` should carry a one-line pointer
+("Observability follows django-harry's README conventions.") rather than restate them.
+
+### Logging conventions
+
+**Log events with fields, not prose.** The message is a snake_case verb phrase naming
+what happened (`payment_failed`, `user_registered`); everything variable goes in
+`extra`:
+
+```python
+logger.info(
+    "payment_failed",
+    extra={"user_id": user.id, "order_id": order.id, "amount": amount},
+)
+```
+
+`JSONFormatter` lifts `extra` keys to top-level JSON keys, so `user_id`, `order_id`,
+and `amount` are directly queryable in SigNoz. `"Payment failed for user 7"` is not.
+
+**No structlog — decided.** `harry.logconfig` (stdlib logging + `JSONFormatter`)
+already provides structured JSON events, trace-id promotion, and canonical-field
+clobber protection with zero dependencies. The `extra={}` syntax is the accepted cost
+of staying on stdlib. Do not re-open this without a concrete failure of the current
+setup. The rationale is recorded in
+[ADR 0001](docs/adr/0001-stdlib-logging-not-structlog.md).
+
+**Level semantics.**
+
+| Level | Means |
+|---|---|
+| `ERROR` | A human should eventually look at this |
+| `WARNING` | Unexpected but handled |
+| `INFO` | Notable business event |
+| `DEBUG` | Off in production (the `prod` profile's default level is `INFO`) |
+
+**Always bind identifying context.** Every event carries `user_id` and the primary
+entity id involved (`order_id`, `message_id`, …). Request-level correlation comes from
+`trace_id` (stamped by OpenTelemetry, see
+"[Correlating logs with traces](#correlating-logs-with-traces)"), not from hand-added
+request-id fields.
+
+**Never log secrets** — tokens, query strings, or full request bodies. These are the
+same exclusions `RequestLogMiddleware` makes deliberately; don't reintroduce them via
+`extra`.
+
+**No bare `print()` in app code.** It bypasses levels, formatting, and shipping.
+
+### Tracing conventions
+
+Auto-instrumentation from `init_observability()` already covers views, the ORM, and
+outbound HTTP. Add a manual span only around a business operation worth timing on its
+own:
+
+```python
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
+
+
+def generate_invoice(order):
+    with tracer.start_as_current_span("generate_invoice"):
+        ...
+```
+
+Exceptions must reach the active span — auto-instrumentation records unhandled ones.
+Never swallow an exception silently: if you catch and handle it, log it with context at
+`WARNING` or `ERROR` so it still surfaces.
+
+### Alerting principles
+
+These live in SigNoz and the uptime monitor, so they can't ship as code — they're
+configured per project at launch (see the checklist below).
+
+- Alert on **symptoms users feel** — errors, latency, downtime — not causes like CPU or
+  disk. Causes belong on dashboards, not pagers.
+- Every alert must be **actionable**. An alert ignored twice gets deleted or fixed.
+- The **standard set** per service:
+  1. Error rate above threshold for 5 minutes
+  2. New exception type
+  3. p95 latency above threshold
+  4. External uptime check on `/health/` (see "[Health endpoint](#health-endpoint)")
+
+### Per-project launch checklist
+
+- [ ] `LOGGING = build_logging_config()` in settings; `DJANGO_ENV=prod` set in
+      production ("[Logging](#logging)")
+- [ ] `harry[otel]` installed; `init_observability()` called in settings
+      ("[Correlating logs with traces](#correlating-logs-with-traces)")
+- [ ] `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and
+      `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=…` set
+- [ ] `RequestLogMiddleware` installed ("[Access logging](#access-logging)"); access
+      lines visible in SigNoz
+- [ ] Traces and exceptions visible in SigNoz; log lines carry `trace_id`
+- [ ] `/health/` wired ("[Health endpoint](#health-endpoint)") and registered with the
+      external uptime monitor
+- [ ] The four standard alerts configured in SigNoz
+      ("[Alerting principles](#alerting-principles)")
+- [ ] Cron/scheduled jobs ping [Healthchecks.io](https://healthchecks.io/) on
+      completion
