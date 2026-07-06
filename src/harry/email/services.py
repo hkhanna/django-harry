@@ -1,7 +1,6 @@
 import logging
 import mimetypes
-import traceback
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import IO, AnyStr, List
 from uuid import uuid4
 
@@ -236,7 +235,8 @@ def email_message_send(*, email_message: EmailMessage) -> None:
         #     raise RuntimeError("GlobalSetting disable_outbound_email is True")
         else:
             django_email_message.send()
-            email_message.message_id = django_email_message.anymail_status.message_id
+            # anymail stamps anymail_status onto the message object at send time.
+            email_message.message_id = django_email_message.anymail_status.message_id  # type: ignore[attr-defined]
 
     except Exception as e:
         email_message.status = constants.EmailMessage.Status.ERROR

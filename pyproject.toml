@@ -60,5 +60,10 @@ plugins = ["mypy_django_plugin.main"]
 module = "opentelemetry.*"
 ignore_missing_imports = true
 
+# anymail ships no py.typed marker either.
+[[tool.mypy.overrides]]
+module = "anymail.*"
+ignore_missing_imports = true
+
 [tool.django-stubs]
 django_settings_module = "tests.settings"
