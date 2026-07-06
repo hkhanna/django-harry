@@ -26,7 +26,8 @@ __all__ = ["init_observability"]
 
 _INSTALL_HINT = (
     "init_observability() requires the OpenTelemetry packages, which harry does not "
-    "install by default. Install the extra: pip install 'harry[otel]'"
+    "install by default. Install the extra: "
+    "uv add 'harry[otel] @ git+https://github.com/hkhanna/django-harry'"
 )
 
 # Instrumentations enabled when their target library is importable. The instrumentor

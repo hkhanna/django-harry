@@ -12,8 +12,6 @@ dependencies = [
     "django>=5.2.7",
 ]
 
-# Each module's third-party dependencies ship as an extra, so installing harry costs
-# nothing a project doesn't wire up.
 [project.optional-dependencies]
 email = [
     "django-anymail>=13.1",

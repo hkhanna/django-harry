@@ -2,11 +2,6 @@ import importlib.util
 
 from django.apps import AppConfig
 
-_INSTALL_HINT = (
-    "harry.email requires django-anymail, which harry does not install by default. "
-    "Install the extra: pip install 'harry[email]'"
-)
-
 
 class EmailConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
@@ -15,5 +10,9 @@ class EmailConfig(AppConfig):
 
     def ready(self):
         if importlib.util.find_spec("anymail") is None:
-            raise ImportError(_INSTALL_HINT)
+            raise ImportError(
+                "harry.email requires django-anymail, which harry does not install "
+                "by default. Install the extra: "
+                "uv add 'harry[email] @ git+https://github.com/hkhanna/django-harry'"
+            )
         import harry.email.signals  # noqa: F401
