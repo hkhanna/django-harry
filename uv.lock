@@ -203,10 +203,12 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "django" },
-    { name = "django-anymail" },
 ]
 
 [package.optional-dependencies]
+email = [
+    { name = "django-anymail" },
+]
 otel = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
@@ -231,7 +233,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "django", specifier = ">=5.2.7" },
-    { name = "django-anymail", specifier = ">=13.1" },
+    { name = "django-anymail", marker = "extra == 'email'", specifier = ">=13.1" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.43,<2" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'otel'", specifier = ">=1.43,<2" },
     { name = "opentelemetry-instrumentation-django", marker = "extra == 'otel'", specifier = ">=0.64b0,<1" },
@@ -240,7 +242,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-requests", marker = "extra == 'otel'", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.43,<2" },
 ]
-provides-extras = ["otel"]
+provides-extras = ["email", "otel"]
 
 [package.metadata.requires-dev]
 dev = [
