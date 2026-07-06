@@ -638,71 +638,25 @@ itself:
 2. Install the OpenTelemetry Collector on the host and give it one pipeline for host metrics
    and one for logs (full sketch below).
 
-Two operators in the log pipeline do the real work:
+Four mappings in the log pipeline do the real work — they are the deployment
+half of the contract `harry.logconfig.JSONFormatter` defines:
 
-- **Recover severity from harry's `level` field.** journald stamps everything on
-  stdout as INFO, which would flatten an app ERROR to INFO in SigNoz — a
-  `json_parser` operator re-parses the real level out of harry's JSON.
-- **Move `msg` to the log body.** This gives a clean human message in SigNoz,
-  with level/logger and any `extra` fields remaining as queryable attributes.
+- **`level` → severity.** journald stamps everything on stdout as INFO, which
+  would flatten an app ERROR to INFO in SigNoz — a `json_parser` operator
+  re-parses the real level out of harry's JSON.
+- **`ts` → record timestamp**, so the record carries the time the app logged,
+  not the time the collector read the journal.
+- **`trace_id`/`span_id` → the log data model's trace fields.** This mapping —
+  not just a shared string attribute — is what makes log↔trace click-through
+  work in SigNoz. The fields are present when [Tracing](#tracing) is on; no
+  in-app log exporter and no change to harry required.
+- **`msg` → log body**, giving a clean human message in SigNoz, with
+  level/logger and any `extra` fields remaining as queryable attributes.
 
-If the app also emits `trace_id`/`span_id` (see [Tracing](#tracing)), they flow
-through the same JSON parsing and SigNoz correlates each log line with its
-trace — no in-app log exporter and no change to harry required.
-
-<details>
-<summary>Collector configuration sketch</summary>
-
-```yaml
-receivers:
-  hostmetrics:
-    collection_interval: 60s
-    scrapers: { cpu: {}, memory: {}, disk: {}, filesystem: {}, load: {}, network: {} }
-  journald:
-    units: [your-django.service]      # or a `filelog` receiver if you log to a file
-    start_at: end
-    operators:
-      # journald delivers the entry as a map; collapse it to the MESSAGE line...
-      - type: move
-        from: body.MESSAGE
-        to: body
-        if: 'body.MESSAGE != nil'
-      # ...then parse harry's JSON. Recover the real severity from the `level`
-      # field — journald otherwise stamps everything on stdout as INFO, which
-      # would flatten an app ERROR to INFO in SigNoz.
-      - type: json_parser
-        if: 'body != nil and body matches "^[{]"'
-        parse_from: body
-        parse_to: attributes
-        severity:
-          parse_from: attributes.level
-          mapping: { debug: DEBUG, info: INFO, warn: WARNING, error: ERROR, fatal: CRITICAL }
-      # Surface the human message as the log body in SigNoz (level/logger/func/
-      # lineno and any extras remain queryable attributes).
-      - type: move
-        from: attributes.msg
-        to: body
-        if: 'attributes.msg != nil'
-processors:
-  resourcedetection: { detectors: [system] }
-  batch: {}
-exporters:
-  otlp:
-    endpoint: ingest.<region>.signoz.cloud:443
-    headers: { signoz-ingestion-key: "${env:SIGNOZ_INGESTION_KEY}" }
-service:
-  pipelines:
-    logs:    { receivers: [journald],    processors: [resourcedetection, batch], exporters: [otlp] }
-    metrics: { receivers: [hostmetrics], processors: [resourcedetection, batch], exporters: [otlp] }
-```
-
-</details>
-
-See the SigNoz docs for the authoritative configuration:
-[install the Collector on a VM](https://signoz.io/docs/opentelemetry-collection-agents/vm/install/),
-[host metrics](https://signoz.io/docs/infrastructure-monitoring/hostmetrics/),
-[systemd/journald logs](https://signoz.io/docs/logs-management/send-logs/collect-systemd-logs/),
-[logs from a file](https://signoz.io/docs/userguide/collect_logs_from_file/).
+The canonical collector configuration — kept in sync with `JSONFormatter`'s
+field names — lives in
+[docs/observability-signoz.md](docs/observability-signoz.md), alongside
+everything else on the SigNoz side (alerts, uptime, retention).
 
 ### One trace across the full lifecycle
 
@@ -815,11 +769,17 @@ configured per project at launch (see the checklist below).
 - Alert on **symptoms users feel** — errors, latency, downtime — not causes like CPU or
   disk. Causes belong on dashboards, not pagers.
 - Every alert must be **actionable**. An alert ignored twice gets deleted or fixed.
-- The **standard set** per service:
+- The **standard set** per service: four SigNoz alerts —
   1. Error rate above threshold for 5 minutes
   2. New exception type
   3. p95 latency above threshold
-  4. External uptime check on `/health/` (see "[Health endpoint](#health-endpoint)")
+  4. Any ERROR-level log for 5 minutes (catches failures outside request
+     spans — management commands, startup, cron)
+
+  — plus an external uptime check on `/health/` (see
+  "[Health endpoint](#health-endpoint)"). Definitions, thresholds, and the
+  provisioning script are in
+  [docs/observability-signoz.md](docs/observability-signoz.md).
 
 ## Per-project integration checklist
 
@@ -855,11 +815,14 @@ purpose; the linked section is the source of *how*.
       `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=…` set
 
 **Launch — configured outside the code** ("[Deployment](#deployment-shipping-logs-and-traces-to-signoz)",
-"[Alerting principles](#alerting-principles)")
+"[Alerting principles](#alerting-principles)"; the step-by-step SigNoz-side
+procedure is in [docs/observability-signoz.md](docs/observability-signoz.md))
 
 - [ ] Access lines and traces visible in SigNoz; log lines carry `trace_id`
+      and click through to their trace
 - [ ] `/health/` registered with the external uptime monitor
 - [ ] The four standard alerts configured in SigNoz
+      (`scripts/signoz-alerts.py provision <service>`)
 - [ ] Cron/scheduled jobs ping [Healthchecks.io](https://healthchecks.io/) on
       completion
 
