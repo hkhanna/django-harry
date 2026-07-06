@@ -205,7 +205,8 @@ Raise logs first if forensics ever demand it.
 [ADR 0002](adr/0002-fleet-baseline-alerts-not-per-service-provisioning.md);
 this supersedes the earlier per-service script mechanism.) The five rules in
 §4 exist exactly once, so they are declared exactly once — in the repo that
-owns the SigNoz tenant's configuration (`infra-misc`, `terraform/signoz.tf`),
+owns the SigNoz tenant's configuration (a separate infra repo — whichever one
+that is at the time — in its `terraform/signoz.tf`),
 using the first-party
 [SigNoz Terraform provider](https://registry.terraform.io/providers/SigNoz/signoz/latest/docs)
 and the same DigitalOcean Spaces state backend as the rest of that root.

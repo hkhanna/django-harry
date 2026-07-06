@@ -17,8 +17,8 @@ with `scripts/signoz-alerts.py`. That shape made two assumptions worth
 questioning: that rules must be per-service (so every new project needs a
 provisioning step, the drift point the doc itself named), and that Terraform
 would be net-new overhead (every project already carries Terraform for its
-VPS, and `infra-misc` already holds fleet-level Terraform with a DigitalOcean
-Spaces state backend).
+VPS, and a fleet-level infra repo already holds shared Terraform with a
+DigitalOcean Spaces state backend).
 
 Two facts dissolved the assumptions. SigNoz alert rules take a `Group By` on
 `service.name` and evaluate each group independently — one rule behaves like N
@@ -29,15 +29,16 @@ ships a first-party Terraform provider (`SigNoz/signoz`) with a
 ## Decision
 
 The standard alert set is **five fleet-wide rules, declared once in
-Terraform** (`infra-misc/terraform/signoz.tf`), each grouped by `service.name`
+Terraform** (the infra repo's `terraform/signoz.tf`), each grouped by
+`service.name`
 and filtered to `deployment.environment = prod`. No alert is ever provisioned
 per project; a new service is covered the moment it emits telemetry.
 `scripts/signoz-alerts.py` is deleted.
 
 Supporting decisions made with it:
 
-- **Home**: the SigNoz tenant's config lives in `infra-misc` (the existing
-  fleet-level infra repo), not in this library and not in any one project —
+- **Home**: the SigNoz tenant's config lives in another repo — the one that
+  holds fleet-level infra — not in this library and not in any one project —
   fleet config must not be coupled to a single project's lifecycle, and this
   repo stays pure code. The trade accepted: a change to `JSONFormatter`'s
   field contract and the alert queries that depend on it now spans two repos.
