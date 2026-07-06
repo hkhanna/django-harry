@@ -3,9 +3,9 @@
 The [README](../README.md) documents what the code ships: JSON logs on stdout,
 OTLP traces, a `/health` endpoint. This doc is the other half — what gets
 configured in SigNoz and adjacent infrastructure so that every project lands in
-the same panes with the same alerts. Sections 1, 3, and 6 are done once per
-SigNoz instance/host; everything in "[Per-project setup](#8-per-project-setup)"
-repeats for each new project.
+the same panes with the same alerts. Sections 3, 4, 6, and 7 are done once per
+SigNoz tenant, section 1 once per host; everything in
+"[Per-project setup](#8-per-project-setup)" repeats for each new project.
 
 ## 1. Collector ingest (once per host)
 
@@ -81,6 +81,11 @@ receivers:
         if: 'attributes.msg != nil'
 processors:
   resourcedetection: { detectors: [system] }
+  resource/env:                         # journald logs never pass through the OTel SDK,
+    attributes:                         # so the environment must be stamped here — the
+      - key: deployment.environment    # fleet alert rules (§4) filter logs on it
+        value: prod                     # (match the host: prod or staging)
+        action: upsert
   batch: {}
 exporters:
   otlp:
@@ -88,9 +93,9 @@ exporters:
     headers: { signoz-ingestion-key: "${env:SIGNOZ_INGESTION_KEY}" }
 service:
   pipelines:
-    traces:  { receivers: [otlp],        processors: [batch],                    exporters: [otlp] }
-    logs:    { receivers: [journald],    processors: [resourcedetection, batch], exporters: [otlp] }
-    metrics: { receivers: [hostmetrics], processors: [resourcedetection, batch], exporters: [otlp] }
+    traces:  { receivers: [otlp],        processors: [batch],                                  exporters: [otlp] }
+    logs:    { receivers: [journald],    processors: [resource/env, resourcedetection, batch], exporters: [otlp] }
+    metrics: { receivers: [hostmetrics], processors: [resourcedetection, batch],               exporters: [otlp] }
 ```
 
 Log lines that never ran inside a span (management commands, startup) simply
@@ -124,29 +129,45 @@ is already in the service's row, its traces, and its logs.
 One channel, created **before any alert rules** (Settings → Alert Channels) —
 email, Slack, or ntfy via webhook; whatever reliably reaches the phone. No
 routing policies at this scale: every alert from every service goes to the one
-channel. Rules reference the channel by name, so creating it first means the
-exported alert templates (§7) carry a working `preferredChannels` value.
+channel. This stays a one-time UI step — the Terraform provider has no channel
+resource (as of v0.0.14) — and the Terraform rules (§7) reference the channel
+by name, so it must exist before the first apply.
 
-## 4. Standard alert set (per service)
+## 4. Standard alert set (fleet-wide)
 
-Four alerts per service, no more. Thresholds are starting points — tune per
-project, but change the template (§7) when a tuned value proves right
-everywhere.
+Five rules for the whole fleet, no more — not five per service. Each rule
+groups by `service.name` (SigNoz evaluates every group as its own series and
+fires with the service name in the notification) and filters on
+`deployment.environment = prod`. The consequence that matters: **a new project
+is covered by all five the moment it ships telemetry.** There is no
+per-project alert provisioning, and therefore nothing to forget or drift.
 
 | # | Alert | Type | Condition | Why this shape |
 |---|---|---|---|---|
-| 1 | Error rate | trace-based | error span percentage > **5%** over **5 min** | a percentage, not a count, so quiet and busy services share one threshold |
-| 2 | New exception | exceptions-based | any new-or-recurring exception for the service | highest-signal alert for a solo operator: fires once on novelty rather than repeatedly on volume |
-| 3 | p95 latency | trace-based | p95 > **1 s** for **10 min** (tune per project) | p95, never averages — averages hide the slow tail users actually feel |
-| 4 | ERROR-log heartbeat | log-based | any log with `severity = ERROR` and `service.name = <project>` over **5 min** | safety net for failures outside request spans (management commands, startup, cron) that trace rules never see |
+| 1 | Error rate | trace-based | error span percentage > **5%** over **5 min**, per service | a percentage, not a count, so quiet and busy services share one threshold |
+| 2 | New exception | exceptions-based | any new-or-recurring exception, per service | highest-signal alert for a solo operator: fires once on novelty rather than repeatedly on volume |
+| 3 | p95 latency | trace-based | p95 > **1 s** for **10 min**, per service | p95, never averages — averages hide the slow tail users actually feel |
+| 4 | ERROR-log heartbeat | log-based | any log with `severity = ERROR`, per service, over **5 min** | safety net for failures outside request spans (management commands, startup, cron) that trace rules never see |
+| 5 | Hygiene | log-based | any `severity = ERROR` log with **no `service.name` at all** | rule 4 groups by service name, so an execution context missing `OTEL_SERVICE_NAME` is invisible to it — this is the canary for telemetry that lost its identity |
+
+Rule 5 monitors the telemetry pipeline, not any service's health. It exists
+because every other log/trace rule keys on `service.name`; §8 step 1 is the
+doctrine (env vars in *every* execution context) that keeps rule 5 quiet.
+
+Thresholds are fleet-wide starting points. When one service genuinely needs a
+different value, don't touch the UI — add an entry to the overrides map in the
+infra repo (§7). The tuned rule and the baseline carve-out are both computed
+from that one entry, so they can't drift apart.
 
 Deliberately absent: CPU / memory / disk alerts. Symptoms over causes (the
 README's alerting principles) — saturation users feel shows up as errors or
-latency, which alerts 1–4 already cover. Host metrics stay on dashboards.
+latency, which rules 1–4 already cover. Host metrics stay on dashboards.
 
-Alert-type support was verified against SigNoz docs (May 2026): metrics-based,
-log-based, trace-based, anomaly-based, and exceptions-based ("new or recurring
-exceptions") rules all exist. References:
+Alert-type support was verified against SigNoz docs (May 2026, group-by
+semantics re-verified July 2026): trace-based and log-based rules take a
+`Group By` on `service.name` and evaluate per group, notification templates
+can interpolate `$service.name`, and exceptions-based rules are ClickHouse
+queries that can group by service in SQL. References:
 [alert types](https://signoz.io/docs/alerts-management/alert-types/),
 [trace-based alerts](https://signoz.io/docs/alerts-management/trace-based-alerts/),
 [log-based alerts](https://signoz.io/docs/alerts-management/log-based-alerts/).
@@ -178,47 +199,39 @@ point:
 
 Raise logs first if forensics ever demand it.
 
-## 7. Alert provisioning: the repeat mechanism
+## 7. Alert provisioning: Terraform in the infra repo
 
-The four alerts are per-service, so every new project means recreating them —
-this is the drift point for "consistent across all projects." The mechanism:
+**Decision: fleet-wide Terraform, not per-service provisioning.** (Recorded in
+[ADR 0002](adr/0002-fleet-baseline-alerts-not-per-service-provisioning.md);
+this supersedes the earlier per-service script mechanism.) The five rules in
+§4 exist exactly once, so they are declared exactly once — in the repo that
+owns the SigNoz tenant's configuration (`infra-misc`, `terraform/signoz.tf`),
+using the first-party
+[SigNoz Terraform provider](https://registry.terraform.io/providers/SigNoz/signoz/latest/docs)
+and the same DigitalOcean Spaces state backend as the rest of that root.
+Applies are manual `terraform apply` from the laptop. Nothing is provisioned
+per project, ever.
 
-**Decision: a script, not Terraform.** The four rules are created once by hand
-in the UI (for the reference project), exported as JSON templates via the
-SigNoz API, and re-created for each new service by
-[`scripts/signoz-alerts.py`](../scripts/signoz-alerts.py) with the service name
-substituted. The [SigNoz Terraform provider](https://registry.terraform.io/providers/SigNoz/signoz/latest/docs)
-manages alert resources and is the conscious escalation path — adopt it only
-if SigNoz configuration ever sprawls beyond the four alerts. Until then a
-50-line script beats a Terraform state file.
+Auth: the provider reads `SIGNOZ_ACCESS_TOKEN` (an API key with admin role)
+from the environment. The API endpoint is set explicitly in the provider
+block, because in that repo `SIGNOZ_ENDPOINT` already means the OTLP *ingest*
+endpoint the collectors use — a different URL.
 
-The script needs two env vars:
+**Per-service tuning is data, not hand-made rules.** `signoz.tf` holds an
+overrides map (e.g. `p95_overrides_ms = { slow-reports = 2500 }`). From that
+one entry Terraform derives both the service's tuned rule and the carve-out
+that removes the service from the baseline rule's filter — so a tune is a
+one-line PR, and the carve-out can never drift from its override. If a tuned
+value proves right in general, promote it to the baseline default and delete
+the entry.
 
-```bash
-export SIGNOZ_URL=https://signoz.example.com   # base URL of the SigNoz UI/API
-export SIGNOZ_API_KEY=...                      # Settings → API Keys (admin role for rule writes)
-```
-
-**Once** — after creating the four rules by hand for the reference project,
-export them as templates (checked into this repo):
-
-```bash
-scripts/signoz-alerts.py export <reference-service>
-# writes scripts/signoz-alert-templates/*.json with the service name
-# replaced by the {{SERVICE}} placeholder — review and commit them
-```
-
-**Per new project** — re-create the four rules with the service name
-substituted:
-
-```bash
-scripts/signoz-alerts.py provision <new-service>            # idempotent: skips rules that already exist
-scripts/signoz-alerts.py provision <new-service> --dry-run  # print what would be created
-```
-
-If a threshold gets hand-tuned in the UI for one service and the tuned value
-proves right in general, re-run `export` against that service and commit the
-updated templates.
+**Bootstrap** (already done once per tenant; recorded for reconstruction):
+create the notification channel in the UI (§3); author the five rules once in
+the UI, where the query builder is the only reliable way to produce the
+condition JSON; then adopt them with Terraform `import` blocks and reconcile
+each resource's `condition` against `terraform state show`. After adoption the
+UI is read-only for these rules — a UI edit to a managed rule is silently
+reverted on the next apply.
 
 ## 8. Per-project setup
 
@@ -226,10 +239,15 @@ The SigNoz-side steps behind the README's
 "[launch checklist](../README.md#per-project-integration-checklist)", in
 order:
 
-1. **Set the two env vars** — `OTEL_SERVICE_NAME=<project>` and
-   `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod` — on the app service
-   and on Caddy (§2). Ensure the host's collector `journald` receiver lists the
-   new app's systemd unit (§1).
+1. **Set the two env vars in every execution context** —
+   `OTEL_SERVICE_NAME=<project>` and
+   `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod` — on the app
+   service, on Caddy, **and on anything else that runs the code: cron jobs,
+   systemd timers, one-off management commands** (§2). A context that misses
+   `OTEL_SERVICE_NAME` emits logs with no service identity: the heartbeat rule
+   can't see them, and the hygiene rule (§4 rule 5) will page about them.
+   Ensure the host's collector `journald` receiver lists the new app's systemd
+   unit and its logs pipeline stamps `deployment.environment` (§1).
 2. **Confirm the service row appears** in SigNoz's Services list after the
    first traffic, and that its log lines carry the right severity and
    `service.name`.
@@ -237,7 +255,8 @@ order:
    and click through to the trace waterfall. If the link is missing, the §1
    `trace` mapping isn't applied — a shared `trace_id` string attribute alone
    won't link.
-4. **Run the alert script** — `scripts/signoz-alerts.py provision <project>`
-   (§7).
+4. **Nothing to provision in SigNoz** — the fleet baseline (§4) covers the new
+   service automatically. Only if a threshold needs tuning later, add an entry
+   to the overrides map in the infra repo (§7).
 5. **Register `/health/` with the uptime monitor** (§5).
 6. **Add Healthchecks.io pings** to the project's cron jobs (§5).

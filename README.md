@@ -763,22 +763,26 @@ Never swallow an exception silently: if you catch and handle it, log it with con
 
 ### Alerting principles
 
-These live in SigNoz and the uptime monitor, so they can't ship as code — they're
-configured per project at launch (see the checklist below).
+The SigNoz rules are **fleet-wide**: declared once in the infra repo's Terraform,
+grouped by service, they cover every project automatically the moment it ships
+telemetry. Only the external uptime checks are configured per project at launch
+(see the checklist below).
 
 - Alert on **symptoms users feel** — errors, latency, downtime — not causes like CPU or
   disk. Causes belong on dashboards, not pagers.
 - Every alert must be **actionable**. An alert ignored twice gets deleted or fixed.
-- The **standard set** per service: four SigNoz alerts —
-  1. Error rate above threshold for 5 minutes
-  2. New exception type
-  3. p95 latency above threshold
-  4. Any ERROR-level log for 5 minutes (catches failures outside request
-     spans — management commands, startup, cron)
+- The **standard set**: five fleet-wide SigNoz rules —
+  1. Error rate above threshold for 5 minutes, per service
+  2. New exception type, per service
+  3. p95 latency above threshold, per service
+  4. Any ERROR-level log for 5 minutes, per service (catches failures outside
+     request spans — management commands, startup, cron)
+  5. Any ERROR-level log carrying no service identity at all (catches an
+     execution context that forgot `OTEL_SERVICE_NAME`)
 
   — plus an external uptime check on `/health/` (see
   "[Health endpoint](#health-endpoint)"). Definitions, thresholds, and the
-  provisioning script are in
+  Terraform provisioning are in
   [docs/observability-signoz.md](docs/observability-signoz.md).
 
 ## Per-project integration checklist
@@ -812,7 +816,8 @@ purpose; the linked section is the source of *how*.
 
 - [ ] `harry[otel]` installed; `init_observability()` called in settings
 - [ ] `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and
-      `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=…` set
+      `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=…` set in **every**
+      execution context — app unit, Caddy, cron jobs, systemd timers
 
 **Launch — configured outside the code** ("[Deployment](#deployment-shipping-logs-and-traces-to-signoz)",
 "[Alerting principles](#alerting-principles)"; the step-by-step SigNoz-side
@@ -821,8 +826,9 @@ procedure is in [docs/observability-signoz.md](docs/observability-signoz.md))
 - [ ] Access lines and traces visible in SigNoz; log lines carry `trace_id`
       and click through to their trace
 - [ ] `/health/` registered with the external uptime monitor
-- [ ] The four standard alerts configured in SigNoz
-      (`scripts/signoz-alerts.py provision <service>`)
+- [ ] Service appears in SigNoz and the fleet-wide standard alerts cover it —
+      automatic, nothing to provision; add an override in the infra repo only
+      if a threshold needs tuning
 - [ ] Cron/scheduled jobs ping [Healthchecks.io](https://healthchecks.io/) on
       completion
 
