@@ -10,7 +10,7 @@ the same way.
 
 | Module | What it does | Needs |
 |---|---|---|
-| [`harry.email`](#email) | Transactional email via anymail, persisted to your database with delivery tracking | anymail + a transactional ESP |
+| [`harry.email`](#email) | Transactional email via anymail, persisted to your database with delivery tracking | the `harry[email]` extra + a transactional ESP |
 | [`harry.logconfig`](#logging) | Structured logging config: readable in development, JSON in production | nothing (stdlib only) |
 | [`harry.middleware`](#request-logging) | One structured access log line per request | nothing |
 | [`harry.views.health`](#health-endpoint) | DB-checking healthcheck endpoint | nothing |
@@ -27,11 +27,13 @@ dependencies = [
 ]
 ```
 
-If the project will use [Tracing](#tracing), install the `otel` extra instead:
+Each module's third-party dependencies ship as an extra, so a project only
+installs what it wires up: [Email](#email) needs the `email` extra,
+[Tracing](#tracing) the `otel` extra. Name what you use in the requirement:
 
 ```toml
 dependencies = [
-    "harry[otel] @ git+https://github.com/hkhanna/django-harry",
+    "harry[email,otel] @ git+https://github.com/hkhanna/django-harry",
 ]
 ```
 
@@ -41,7 +43,8 @@ Transactional email through [django-anymail](https://anymail.dev/), with every
 message persisted as an `EmailMessage` record in your database and delivery
 tracked via ESP webhooks.
 
-**Requires:** anymail and a transactional ESP account. Nothing else from harry.
+**Requires:** the `harry[email]` extra (see [Installation](#installation)) and
+a transactional ESP account. Nothing else from harry.
 
 ### Setup
 
@@ -793,7 +796,7 @@ purpose; the linked section is the source of *how*.
 
 **Email** ("[Email](#email)")
 
-- [ ] `anymail` and `harry.email` in `INSTALLED_APPS`; ESP configured via `EMAIL_BACKEND` + `ANYMAIL`
+- [ ] `harry[email]` installed; `anymail` and `harry.email` in `INSTALLED_APPS`; ESP configured via `EMAIL_BACKEND` + `ANYMAIL`
 - [ ] `SITE_CONFIG` and `MAX_SUBJECT_LENGTH` set
 - [ ] Email templates created (`*_subject.txt`, `*_message.txt`)
 - [ ] Migrations run
@@ -839,7 +842,7 @@ procedure is in [docs/observability-signoz.md](docs/observability-signoz.md))
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-# Install dependencies (--all-extras so the OpenTelemetry integration tests run)
+# Install dependencies (--all-extras so the email and OpenTelemetry tests run)
 uv sync --all-extras
 ```
 
