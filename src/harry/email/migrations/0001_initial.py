@@ -8,6 +8,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
+
     initial = True
 
     dependencies = [
@@ -16,148 +17,44 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name="EmailMessage",
+            name='EmailMessage',
             fields=[
-                (
-                    "id",
-                    models.BigAutoField(
-                        auto_created=True,
-                        primary_key=True,
-                        serialize=False,
-                        verbose_name="ID",
-                    ),
-                ),
-                (
-                    "uuid",
-                    models.UUIDField(
-                        default=uuid.uuid4,
-                        editable=False,
-                        help_text="Secondary ID",
-                        unique=True,
-                        verbose_name="UUID",
-                    ),
-                ),
-                (
-                    "created_at",
-                    models.DateTimeField(
-                        db_index=True, default=django.utils.timezone.now
-                    ),
-                ),
-                ("updated_at", models.DateTimeField(auto_now=True)),
-                ("sent_at", models.DateTimeField(blank=True, null=True)),
-                ("sender_name", models.CharField(blank=True, max_length=254)),
-                ("sender_email", models.EmailField(max_length=254)),
-                ("to_name", models.CharField(blank=True, max_length=254)),
-                ("to_email", models.EmailField(max_length=254)),
-                ("reply_to_name", models.CharField(blank=True, max_length=254)),
-                ("reply_to_email", models.EmailField(blank=True, max_length=254)),
-                ("subject", models.CharField(blank=True, max_length=254)),
-                ("template_prefix", models.CharField(max_length=254)),
-                ("template_context", models.JSONField(blank=True, default=dict)),
-                (
-                    "message_id",
-                    models.CharField(
-                        blank=True,
-                        default=None,
-                        help_text="Message-ID provided by the sending service as per RFC 5322",
-                        max_length=254,
-                        null=True,
-                        unique=True,
-                    ),
-                ),
-                (
-                    "status",
-                    models.CharField(
-                        choices=[
-                            ("new", "New"),
-                            ("ready", "Ready"),
-                            ("pending", "Pending"),
-                            ("accepted", "Accepted"),
-                            ("canceled", "Canceled"),
-                            ("error", "Error"),
-                            ("delivered", "Delivered"),
-                            ("rejected", "Rejected"),
-                            ("bounced", "Bounced"),
-                            ("complained", "Complained"),
-                            ("unsubscribed", "Unsubscribed"),
-                            ("opened", "Opened"),
-                            ("clicked", "Clicked"),
-                            ("unknown", "Unknown"),
-                        ],
-                        default="new",
-                        max_length=254,
-                    ),
-                ),
-                (
-                    "esp_event",
-                    models.JSONField(
-                        blank=True, default=dict, help_text="Raw ESP webhook event"
-                    ),
-                ),
-                (
-                    "esp_event_at",
-                    models.DateTimeField(
-                        blank=True,
-                        help_text="Timestamp of most recent ESP webhook received",
-                        null=True,
-                    ),
-                ),
-                ("error_message", models.TextField(blank=True)),
-                (
-                    "created_by",
-                    models.ForeignKey(
-                        blank=True,
-                        help_text="User that caused the EmailMessage to be created.",
-                        null=True,
-                        on_delete=django.db.models.deletion.SET_NULL,
-                        to=settings.AUTH_USER_MODEL,
-                    ),
-                ),
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('uuid', models.UUIDField(default=uuid.uuid4, editable=False, help_text='Secondary ID', unique=True, verbose_name='UUID')),
+                ('created_at', models.DateTimeField(db_index=True, default=django.utils.timezone.now)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('sent_at', models.DateTimeField(blank=True, null=True)),
+                ('sender_name', models.CharField(blank=True, max_length=254)),
+                ('sender_email', models.EmailField(max_length=254)),
+                ('to_name', models.CharField(blank=True, max_length=254)),
+                ('to_email', models.EmailField(max_length=254)),
+                ('reply_to_name', models.CharField(blank=True, max_length=254)),
+                ('reply_to_email', models.EmailField(blank=True, max_length=254)),
+                ('subject', models.CharField(blank=True, max_length=254)),
+                ('template_prefix', models.CharField(max_length=254)),
+                ('template_context', models.JSONField(blank=True, default=dict)),
+                ('message_id', models.CharField(blank=True, default=None, help_text='Message-ID provided by the sending service as per RFC 5322', max_length=254, null=True, unique=True)),
+                ('status', models.CharField(choices=[('new', 'New'), ('ready', 'Ready'), ('pending', 'Pending'), ('accepted', 'Accepted'), ('canceled', 'Canceled'), ('error', 'Error'), ('delivered', 'Delivered'), ('rejected', 'Rejected'), ('bounced', 'Bounced'), ('complained', 'Complained'), ('unsubscribed', 'Unsubscribed'), ('opened', 'Opened'), ('clicked', 'Clicked'), ('unknown', 'Unknown')], default='new', max_length=254)),
+                ('esp_event', models.JSONField(blank=True, default=dict, help_text='Raw ESP webhook event')),
+                ('esp_event_at', models.DateTimeField(blank=True, help_text='Timestamp of most recent ESP webhook received', null=True)),
+                ('error_message', models.TextField(blank=True)),
+                ('created_by', models.ForeignKey(blank=True, help_text='User that caused the EmailMessage to be created.', null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
             ],
         ),
         migrations.CreateModel(
-            name="EmailMessageAttachment",
+            name='EmailMessageAttachment',
             fields=[
-                (
-                    "id",
-                    models.BigAutoField(
-                        auto_created=True,
-                        primary_key=True,
-                        serialize=False,
-                        verbose_name="ID",
-                    ),
-                ),
-                (
-                    "uuid",
-                    models.UUIDField(
-                        default=uuid.uuid4,
-                        editable=False,
-                        help_text="Secondary ID",
-                        unique=True,
-                        verbose_name="UUID",
-                    ),
-                ),
-                (
-                    "created_at",
-                    models.DateTimeField(
-                        db_index=True, default=django.utils.timezone.now
-                    ),
-                ),
-                ("updated_at", models.DateTimeField(auto_now=True)),
-                ("file", models.FileField(upload_to="email_message_attachments/")),
-                ("filename", models.CharField(max_length=254)),
-                ("mimetype", models.CharField(max_length=254)),
-                (
-                    "email_message",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE,
-                        related_name="attachments",
-                        to="email.emailmessage",
-                    ),
-                ),
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('uuid', models.UUIDField(default=uuid.uuid4, editable=False, help_text='Secondary ID', unique=True, verbose_name='UUID')),
+                ('created_at', models.DateTimeField(db_index=True, default=django.utils.timezone.now)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('file', models.FileField(upload_to='email_message_attachments/')),
+                ('filename', models.CharField(max_length=254)),
+                ('mimetype', models.CharField(max_length=254)),
+                ('email_message', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attachments', to='email.emailmessage')),
             ],
             options={
-                "order_with_respect_to": "email_message",
+                'order_with_respect_to': 'email_message',
             },
         ),
     ]

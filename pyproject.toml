@@ -44,6 +44,11 @@ dev = [
     "ruff>=0.14.1",
 ]
 
+# Migrations stay byte-for-byte as `makemigrations` writes them, so ruff neither
+# lints nor reformats them.
+[tool.ruff]
+extend-exclude = ["**/migrations"]
+
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
 pythonpath = ["."]
