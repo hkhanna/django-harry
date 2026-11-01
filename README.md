@@ -1,16 +1,15 @@
 # harry
 
-Email and logging primitives for Django projects.
+Email primitives for Django projects.
 
 harry is a set of independent modules that share one package. Each module is
 adoptable on its own — installing the package costs nothing until you wire a
 module into your settings, and no module requires another. The goal is that
-every project that installs harry sends email and logs the same way.
+every project that installs harry sends email the same way.
 
 | Module | What it does | Needs |
 |---|---|---|
 | [`harry.email`](#email) | Transactional email via anymail, persisted to your database with delivery tracking | the `harry[email]` extra + a transactional ESP |
-| [`harry.logconfig`](#logging) | Structured logging config: readable in development, JSON in production | nothing (stdlib only) |
 
 ## Installation
 
@@ -370,69 +369,6 @@ match Anymail's normalized event types one for one, so each webhook's
 | `UNKNOWN` | ESP reported an unrecognized event type |
 | `CANCELED` | Suppressed by cooldown |
 | `ERROR` | Something went wrong during preparation or sending |
-
-## Logging
-
-A reusable logging configuration so every project that installs harry logs the
-same way: human-readable console output in development, structured JSON in
-production.
-
-**Requires:** nothing. It has no extra dependencies — it builds a standard
-Django [`LOGGING`](https://docs.djangoproject.com/en/5.2/topics/logging/)
-dictionary from stdlib logging.
-
-### Setup
-
-In your project's `settings.py`:
-
-```python
-from harry.logconfig import build_logging_config
-
-LOGGING = build_logging_config()
-```
-
-That's it. By default the configuration:
-
-- logs human-readable, colorless console output in development and **structured JSON** in
-  production;
-- writes to **stdout** (12-factor) — no file handlers, so the platform (systemd, Docker, your
-  log collector) owns persistence and rotation;
-- keeps `disable_existing_loggers` off so Django's and third-party loggers keep working;
-- configures the `django`, `django.request`, `django.security`, and `harry` loggers plus the
-  root logger.
-
-### Reference: configuration
-
-`build_logging_config()` resolves each setting from its keyword argument, then an environment
-variable, then a per-environment default:
-
-| Argument | Env var | Values | Default |
-|---|---|---|---|
-| `env` | `DJANGO_ENV` | `local` / `test` / `prod` | `local` |
-| `level` | `DJANGO_LOG_LEVEL` | any logging level | `DEBUG` (local), `WARNING` (test), `INFO` (prod) |
-| `fmt` | `DJANGO_LOG_FORMAT` | `console` / `json` | `console` (local/test), `json` (prod) |
-
-```python
-# Add or override loggers for your project without losing the defaults:
-LOGGING = build_logging_config(
-    extra_loggers={"myapp": {"level": "INFO", "handlers": ["console"], "propagate": False}},
-)
-```
-
-The merge is shallow: an entry in `extra_loggers` replaces a built-in logger wholesale, so
-when overriding one (say, `django.request`) spell out `handlers` and `propagate` too.
-
-`env` is read from `os.environ`, not `settings.DEBUG`, because the builder runs while
-`settings.py` is still being evaluated. Set `DJANGO_ENV` in each environment.
-
-A production log line looks like:
-
-```json
-{"ts": "2026-06-30T12:34:56.789012+00:00", "level": "INFO", "logger": "harry.email.services", "msg": "Sent email message", "message_id": "…"}
-```
-
-Anything you pass via `logger.info("…", extra={"message_id": mid})` is merged into the JSON.
-Where the JSON goes after stdout is a deployment concern, not a logging one.
 
 ## Development
 
