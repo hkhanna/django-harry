@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "harry"
 version = "0.1.0"
-description = "Email, logging, and observability primitives for Django projects"
+description = "Email primitives for Django projects"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -15,20 +15,6 @@ dependencies = [
 [project.optional-dependencies]
 email = [
     "django-anymail>=13.1",
-]
-# The OpenTelemetry packages release in lockstep and occasionally break against each
-# other; this extra is the single place the compatible constellation is maintained.
-# Ranges (not exact pins) because harry is a library — hard pins would deadlock a
-# consumer's resolver. The stable packages version as 1.x, the instrumentations as
-# 0.NNbM betas; each 1.N release pairs with the 0.(N+21)b0 instrumentation release.
-otel = [
-    "opentelemetry-api>=1.43,<2",
-    "opentelemetry-sdk>=1.43,<2",
-    "opentelemetry-exporter-otlp>=1.43,<2",
-    "opentelemetry-instrumentation-django>=0.64b0,<1",
-    "opentelemetry-instrumentation-psycopg>=0.64b0,<1",
-    "opentelemetry-instrumentation-requests>=0.64b0,<1",
-    "opentelemetry-instrumentation-logging>=0.64b0,<1",
 ]
 
 [dependency-groups]
@@ -56,14 +42,7 @@ python_functions = ["test_*"]
 [tool.mypy]
 plugins = ["mypy_django_plugin.main"]
 
-# The OpenTelemetry instrumentation packages ship no py.typed marker, and none of
-# the otel packages are installed unless the extra is (harry.observability imports
-# them lazily either way).
-[[tool.mypy.overrides]]
-module = "opentelemetry.*"
-ignore_missing_imports = true
-
-# anymail ships no py.typed marker either.
+# anymail ships no py.typed marker.
 [[tool.mypy.overrides]]
 module = "anymail.*"
 ignore_missing_imports = true
