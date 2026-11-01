@@ -339,30 +339,38 @@ Every `EmailMessage` moves through these statuses:
                  CANCELED
                  ▲
                  │
-NEW ──> READY ──┼──> PENDING ──> ACCEPTED ──> DELIVERED
-                │      │                         │
-                ▼      ▼                         ├──> OPENED ──> CLICKED
-              ERROR  ERROR                       ├──> BOUNCED
-                                                 ├──> REJECTED
-                                                 ├──> COMPLAINED
-                                                 └──> UNSUBSCRIBED
+NEW ──> READY ──┼──> PENDING ──> SUBMITTED ──> DELIVERED
+                │      │                          │
+                ▼      ▼                          ├──> OPENED ──> CLICKED
+              ERROR  ERROR                        ├──> BOUNCED
+                                                  ├──> REJECTED
+                                                  ├──> COMPLAINED
+                                                  └──> UNSUBSCRIBED
 ```
 
-Unrecognized ESP event types are stored as `UNKNOWN`.
+Everything after `SUBMITTED` comes from ESP tracking webhooks. The ESP statuses
+match Anymail's normalized event types one for one, so each webhook's
+`event_type` is stored as-is. Unrecognized event types are stored as `UNKNOWN`.
 
 | Status | Meaning |
 |---|---|
 | `NEW` | Created, not yet prepared |
 | `READY` | Prepared with defaults applied, validated, ready to send |
 | `PENDING` | Handed off to the email backend |
-| `ACCEPTED` | Backend accepted the message |
+| `SUBMITTED` | Backend accepted the message and returned a message ID |
+| `QUEUED` | ESP confirmed it has the message (Mailgun calls this "accepted") |
+| `SENT` | ESP has handed the message to the recipient's mail server |
+| `DEFERRED` | Soft failure, ESP will retry |
 | `DELIVERED` | ESP confirmed delivery to recipient's mail server |
+| `AUTORESPONDED` | Recipient's mail server sent an automatic reply |
 | `OPENED` | Recipient opened the email (if tracking is enabled) |
 | `CLICKED` | Recipient clicked a link in the email (if tracking is enabled) |
 | `BOUNCED` | Delivery failed (hard or soft bounce) |
 | `REJECTED` | ESP rejected the message before delivery |
+| `FAILED` | ESP was unable to send the message |
 | `COMPLAINED` | Recipient marked the email as spam |
 | `UNSUBSCRIBED` | Recipient unsubscribed via email headers |
+| `SUBSCRIBED` | Recipient re-subscribed |
 | `UNKNOWN` | ESP reported an unrecognized event type |
 | `CANCELED` | Suppressed by cooldown |
 | `ERROR` | Something went wrong during preparation or sending |

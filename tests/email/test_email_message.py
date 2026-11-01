@@ -1,3 +1,4 @@
+import logging
 import tempfile
 from datetime import timedelta
 
@@ -16,8 +17,9 @@ def anymail_backend(settings):
     settings.EMAIL_BACKEND = "anymail.backends.test.EmailBackend"
 
 
-def test_send_email(user, mailoutbox, settings):
+def test_send_email(user, mailoutbox, settings, caplog):
     """Create and send an EmailMessage"""
+    caplog.set_level(logging.INFO, logger="harry.email.services")
     email_message = services.email_message_create(
         created_by=user,
         subject="A subject",
@@ -33,7 +35,7 @@ def test_send_email(user, mailoutbox, settings):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
     assert len(mailoutbox) == 1
     assert mailoutbox[0].subject == "A subject"
     assert mailoutbox[0].to == [f"{user.first_name} <{user.email}>"]
@@ -42,6 +44,16 @@ def test_send_email(user, mailoutbox, settings):
         == f"{settings.SITE_CONFIG['default_from_name']} <{settings.SITE_CONFIG['default_from_email']}>"
     )
     assert mailoutbox[0].reply_to == []
+
+    # A successful send logs the message_id so it can be matched to later webhooks.
+    assert email_message.message_id
+    sent_logs = [r for r in caplog.records if " submitted: " in r.getMessage()]
+    assert len(sent_logs) == 1
+    assert sent_logs[0].levelno == logging.INFO
+    assert (
+        sent_logs[0].getMessage()
+        == f"EmailMessage.id={email_message.id} submitted: message_id={email_message.message_id} recipient={user.email}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -72,7 +84,7 @@ def test_send_email_sanitize(user, name, email, expected, mailoutbox):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
     assert len(mailoutbox) == 1
     assert mailoutbox[0].subject == "A subject"
     assert mailoutbox[0].to == [expected]
@@ -166,7 +178,7 @@ def test_email_attachment(user, mailoutbox):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
     assert email_message.attachments.count() == 2
     assert len(mailoutbox) == 1
     assert len(mailoutbox[0].attachments) == 2
@@ -232,7 +244,7 @@ def test_cooldown(user, mailoutbox):
     assert services.email_message_queue(email_message=email_message) is True
     assert len(mailoutbox) == 1
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
 
     # Send an email with a different recipient
     email_message = services.email_message_create(
@@ -241,7 +253,7 @@ def test_cooldown(user, mailoutbox):
     assert services.email_message_queue(email_message=email_message) is True
     assert len(mailoutbox) == 2
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
 
     # Cancel the third email that is identical to the first
     email_message = services.email_message_create(**email_message_args)
@@ -256,7 +268,7 @@ def test_cooldown(user, mailoutbox):
         assert services.email_message_queue(email_message=email_message) is True
         assert len(mailoutbox) == 3
         email_message.refresh_from_db()
-        assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+        assert email_message.status == constants.EmailMessage.Status.SUBMITTED
 
 
 def test_cooldown_scopes(user, mailoutbox):
@@ -279,7 +291,7 @@ def test_cooldown_scopes(user, mailoutbox):
     assert services.email_message_queue(email_message=email_message) is True
     assert len(mailoutbox) == 1
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
 
     # Email with different recipient cancels if "to" scope is removed
     email_message = services.email_message_create(
@@ -369,7 +381,7 @@ def test_send_email_with_reply_to(user, mailoutbox):
 
     services.email_message_queue(email_message=email_message)
     email_message.refresh_from_db()
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
     assert len(mailoutbox) == 1
     assert mailoutbox[0].reply_to == ["Support <support@example.com>"]
 
@@ -403,7 +415,7 @@ def test_reply_to_name_no_email(user, mailoutbox):
 def test_webhook_updates_status():
     """A delivered event for a known message_id updates the EmailMessage's status, esp_event, and esp_event_at fields"""
     email_message = factories.email_message_create(
-        status=constants.EmailMessage.Status.ACCEPTED,
+        status=constants.EmailMessage.Status.SUBMITTED,
         message_id="test-message-id-123",
     )
 
@@ -423,15 +435,92 @@ def test_webhook_updates_status():
     assert email_message.esp_event_at == event.timestamp
 
 
-def test_webhook_unknown_event_type():
-    """An event type not in the Status choices (e.g. 'autoresponded') sets status to UNKNOWN"""
+def test_webhook_queued_event(caplog):
+    """Mailgun's 'accepted' event arrives from Anymail as 'queued'. It must be stored as QUEUED, not UNKNOWN."""
+    caplog.set_level(logging.INFO, logger="harry.email.services")
     email_message = factories.email_message_create(
-        status=constants.EmailMessage.Status.ACCEPTED,
+        status=constants.EmailMessage.Status.SUBMITTED,
         message_id="test-message-id-123",
     )
 
     event = AnymailTrackingEvent(
-        event_type="autoresponded",
+        event_type="queued",
+        message_id="test-message-id-123",
+        event_id="evt-1",
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+        esp_event={"raw": "event-data"},
+    )
+
+    services.email_message_webhook_process(event=event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == constants.EmailMessage.Status.QUEUED
+    assert email_message.esp_event == {"raw": "event-data"}
+    assert email_message.esp_event_at == event.timestamp
+    assert (
+        f"EmailMessage.id={email_message.id} status updated: submitted -> queued (event_type=queued event_id=evt-1)"
+        in caplog.messages
+    )
+
+
+@pytest.mark.parametrize(
+    "event_type,expected_status",
+    [
+        ("queued", constants.EmailMessage.Status.QUEUED),
+        ("sent", constants.EmailMessage.Status.SENT),
+        ("rejected", constants.EmailMessage.Status.REJECTED),
+        ("failed", constants.EmailMessage.Status.FAILED),
+        ("bounced", constants.EmailMessage.Status.BOUNCED),
+        ("deferred", constants.EmailMessage.Status.DEFERRED),
+        ("delivered", constants.EmailMessage.Status.DELIVERED),
+        ("autoresponded", constants.EmailMessage.Status.AUTORESPONDED),
+        ("opened", constants.EmailMessage.Status.OPENED),
+        ("clicked", constants.EmailMessage.Status.CLICKED),
+        ("complained", constants.EmailMessage.Status.COMPLAINED),
+        ("unsubscribed", constants.EmailMessage.Status.UNSUBSCRIBED),
+        ("subscribed", constants.EmailMessage.Status.SUBSCRIBED),
+        ("unknown", constants.EmailMessage.Status.UNKNOWN),
+        # Anything Anymail hasn't defined.
+        ("some-future-event-type", constants.EmailMessage.Status.UNKNOWN),
+    ],
+)
+def test_webhook_event_type_mapping(event_type, expected_status, caplog):
+    """Every Anymail tracking event type is stored as the same-named Status, and the log reports the saved status."""
+    caplog.set_level(logging.INFO, logger="harry.email.services")
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.SUBMITTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type=event_type,
+        message_id="test-message-id-123",
+        event_id="evt-1",
+        recipient=email_message.to_email,
+        timestamp=timezone.now(),
+        esp_event={"raw": "event-data"},
+    )
+
+    services.email_message_webhook_process(event=event)
+    email_message.refresh_from_db()
+
+    assert email_message.status == expected_status
+    assert (
+        f"EmailMessage.id={email_message.id} status updated: submitted -> {expected_status.value} (event_type={event_type} event_id=evt-1)"
+        in caplog.messages
+    )
+
+
+def test_webhook_unknown_event_type():
+    """An event type not in the Status choices sets status to UNKNOWN"""
+    email_message = factories.email_message_create(
+        status=constants.EmailMessage.Status.SUBMITTED,
+        message_id="test-message-id-123",
+    )
+
+    event = AnymailTrackingEvent(
+        event_type="some-future-event-type",
         message_id="test-message-id-123",
         recipient=email_message.to_email,
         timestamp=timezone.now(),
@@ -449,7 +538,7 @@ def test_webhook_unknown_event_type():
 def test_webhook_no_message_id():
     """Event with message_id=None returns early with a warning without touching any records"""
     email_message = factories.email_message_create(
-        status=constants.EmailMessage.Status.ACCEPTED,
+        status=constants.EmailMessage.Status.SUBMITTED,
         message_id="test-message-id-123",
     )
 
@@ -463,7 +552,7 @@ def test_webhook_no_message_id():
     services.email_message_webhook_process(event=event)
     email_message.refresh_from_db()
 
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
     assert email_message.esp_event == {}
     assert email_message.esp_event_at is None
 
@@ -471,7 +560,7 @@ def test_webhook_no_message_id():
 def test_webhook_no_matching_email_message():
     """Event with a message_id that doesn't match any EmailMessage returns early with a warning"""
     email_message = factories.email_message_create(
-        status=constants.EmailMessage.Status.ACCEPTED,
+        status=constants.EmailMessage.Status.SUBMITTED,
         message_id="test-message-id-123",
     )
 
@@ -485,7 +574,7 @@ def test_webhook_no_matching_email_message():
     services.email_message_webhook_process(event=event)
     email_message.refresh_from_db()
 
-    assert email_message.status == constants.EmailMessage.Status.ACCEPTED
+    assert email_message.status == constants.EmailMessage.Status.SUBMITTED
     assert email_message.esp_event == {}
     assert email_message.esp_event_at is None
 
@@ -521,7 +610,7 @@ def test_webhook_signal_integration():
     from anymail.signals import tracking
 
     email_message = factories.email_message_create(
-        status=constants.EmailMessage.Status.ACCEPTED,
+        status=constants.EmailMessage.Status.SUBMITTED,
         message_id="test-message-id-123",
     )
 

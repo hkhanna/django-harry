@@ -247,10 +247,16 @@ def email_message_send(*, email_message: EmailMessage) -> None:
             f"EmailMessage.id={email_message.id} Exception caught in send_email_message"
         )
     else:
-        email_message.status = constants.EmailMessage.Status.ACCEPTED
+        email_message.status = constants.EmailMessage.Status.SUBMITTED
         email_message.sent_at = timezone.now()
         email_message.full_clean()
         email_message.save()
+        logger.info(
+            "EmailMessage.id=%s submitted: message_id=%s recipient=%s",
+            email_message.id,
+            email_message.message_id,
+            email_message.to_email,
+        )
 
 
 def email_message_create(*, save: bool = False, **kwargs) -> EmailMessage:
@@ -345,7 +351,7 @@ def email_message_webhook_process(*, event: AnymailTrackingEvent) -> None:
         old_status = email_message.status
         valid_statuses = {choice.value for choice in constants.EmailMessage.Status}
         status = (
-            event.event_type
+            constants.EmailMessage.Status(event.event_type)
             if event.event_type in valid_statuses
             else constants.EmailMessage.Status.UNKNOWN
         )
@@ -355,9 +361,10 @@ def email_message_webhook_process(*, event: AnymailTrackingEvent) -> None:
         email_message.full_clean()
         email_message.save()
         logger.info(
-            "EmailMessage.id=%s status updated: %s -> %s (event_id=%s)",
+            "EmailMessage.id=%s status updated: %s -> %s (event_type=%s event_id=%s)",
             email_message.id,
             old_status,
+            status,
             event.event_type,
             event.event_id,
         )
